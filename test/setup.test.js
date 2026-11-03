@@ -3,7 +3,7 @@ const assert=require('node:assert/strict');
 const fs=require('fs');
 const os=require('os');
 const path=require('path');
-const {supportedNode,supportedPython,ensureLocalFiles,updateSenders,collectStatus}=require('../scripts/setup');
+const {supportedNode,supportedPython,ensureLocalFiles,updateSenders,collectStatus,findPython312,repairSignatures}=require('../scripts/setup');
 
 function fixture(t) {
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'invoice-setup-test-'));
@@ -12,6 +12,33 @@ function fixture(t) {
   fs.writeFileSync(path.join(dir,'config.example.json'),JSON.stringify({allowedSenders:['billing@example.com'],firstRunAfter:null}));
   return dir;
 }
+
+test('signature repair selects only 64-bit Python 3.12, including when PATH points at 3.15',()=>{
+  const executable=path.resolve('python312-test','python.exe');
+  const result=findPython312(process.cwd(),{env:{},run:command=>({ok:true,text:JSON.stringify({executable,version:command==='py'?[3,12]:[3,15],bits:64})})});
+  assert.equal(result,executable);
+  for(const info of [{version:[3,15],bits:64},{version:[3,12],bits:32}]) {
+    assert.throws(()=>findPython312(process.cwd(),{env:{},run:()=>({ok:true,text:JSON.stringify({...info,executable})})}),/64-bit Python 3.12 was not found/);
+  }
+});
+
+test('signature repair preserves old environment and data, and does not move anything when Python is missing',t=>{
+  const dir=fixture(t);ensureLocalFiles(dir);
+  const environment=path.join(dir,'.signature-venv');fs.mkdirSync(environment);fs.writeFileSync(path.join(environment,'old-marker'),'old verifier');
+  fs.mkdirSync(path.join(dir,'data'));fs.writeFileSync(path.join(dir,'data','invoice.pdf'),'original invoice');
+  const settings=fs.readFileSync(path.join(dir,'.env'),'utf8');
+  assert.throws(()=>repairSignatures(dir,{find:()=>{throw Error('Python missing');}}),/Python missing/);
+  assert.equal(fs.readFileSync(path.join(environment,'old-marker'),'utf8'),'old verifier');
+  const pythonCommand=path.resolve('python312-test','python.exe');
+  repairSignatures(dir,{find:()=>pythonCommand,install:(projectRoot,options)=>{
+    assert.equal(projectRoot,dir);assert.equal(options.pythonCommand,pythonCommand);
+    assert.equal(fs.existsSync(environment),false);fs.mkdirSync(environment);fs.writeFileSync(path.join(environment,'new-marker'),'new verifier');
+  }});
+  const backups=fs.readdirSync(path.join(dir,'data','backups'));assert.equal(backups.length,1);
+  assert.equal(fs.readFileSync(path.join(dir,'data','backups',backups[0],'old-marker'),'utf8'),'old verifier');
+  assert.equal(fs.readFileSync(path.join(dir,'data','invoice.pdf'),'utf8'),'original invoice');
+  assert.equal(fs.readFileSync(path.join(dir,'.env'),'utf8'),settings);
+});
 test('setup accepts supported runtimes and identifies unsupported/missing versions',()=>{
   for(const v of ['v22.16.0','v24.22.1'])assert.equal(supportedNode(v),true);
   for(const v of ['v20.19.0','v22.0.0','v26.0.0','missing'])assert.equal(supportedNode(v),false);

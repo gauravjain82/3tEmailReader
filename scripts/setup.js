@@ -84,11 +84,11 @@ function findNpm(projectRoot=root) {
   if(found.ok)for(const command of found.text.split(/\r?\n/))candidates.push(path.join(path.dirname(command),'node_modules','npm','bin','npm-cli.js'));
   const npm=candidates.find(f=>fs.existsSync(f));if(!npm)throw Error('npm is missing. Reinstall Node.js with npm selected. See SETUP.md.');return npm;
 }
-function setupSignatures(projectRoot=root) {
-  const python=probe('python',['--version'],projectRoot);
+function setupSignatures(projectRoot=root,{pythonCommand='python'}={}) {
+  const python=probe(pythonCommand,['--version'],projectRoot);
   if(!python.ok || !supportedPython(python.text))throw Error('Install Python 3.10+ (recommended 3.12), reopen this window, and rerun setup. See SETUP.md.');
   const executable=path.join(projectRoot,'.signature-venv','Scripts','python.exe');
-  if(!fs.existsSync(executable))execute('python',['-m','venv',path.join(projectRoot,'.signature-venv')],projectRoot);
+  if(!fs.existsSync(executable))execute(pythonCommand,['-m','venv',path.join(projectRoot,'.signature-venv')],projectRoot);
   execute(executable,['-c',"import sys,struct; print('Verifier Python:',sys.version.split()[0],str(struct.calcsize('P')*8)+'-bit')"],projectRoot);
   execute(executable,['-m','pip','install','--upgrade','pip'],projectRoot);
   try {
@@ -102,11 +102,43 @@ function setupSignatures(projectRoot=root) {
   execute(executable,['-c',"from importlib.metadata import version; assert version('pyHanko')=='0.33.0'; print('Signature verifier is installed.')"],projectRoot);
   fs.mkdirSync(path.join(projectRoot,'certificates','trusted-roots'),{recursive:true});
 }
+function findPython312(projectRoot=root,{run=probe,env=process.env}={}) {
+  const candidates=[];
+  if(env.LOCALAPPDATA)candidates.push([path.join(env.LOCALAPPDATA,'Programs','Python','Python312','python.exe'),[]]);
+  if(env.ProgramFiles)candidates.push([path.join(env.ProgramFiles,'Python312','python.exe'),[]]);
+  candidates.push(['py',['-3.12']],['python',[]]);
+  const inspect="import sys,struct,json; print(json.dumps({'executable':sys.executable,'version':list(sys.version_info[:2]),'bits':struct.calcsize('P')*8}))";
+  for(const [command,prefix] of candidates) {
+    const result=run(command,[...prefix,'-c',inspect],projectRoot);
+    if(result.ok)try {
+      const info=JSON.parse(result.text);
+      if(info.version?.[0]===3 && info.version?.[1]===12 && info.bits===64 && typeof info.executable==='string' && path.isAbsolute(info.executable))return info.executable;
+    }catch{}
+  }
+  throw Error('64-bit Python 3.12 was not found. Install the Windows installer (64-bit) from https://www.python.org/downloads/release/python-31210/ using its default location, then rerun Repair Signature Setup.cmd. The existing verifier environment has not been changed.');
+}
+function repairSignatures(projectRoot=root,{find=findPython312,install=setupSignatures}={}) {
+  const pythonCommand=find(projectRoot); // Locate the correct interpreter before moving anything.
+  console.log('Repair will use:',pythonCommand);
+  const environment=path.resolve(projectRoot,'.signature-venv');
+  if(fs.existsSync(environment)) {
+    const backup=path.resolve(projectRoot,'data','backups',`signature-venv-${Date.now()}-${require('crypto').randomUUID()}`);
+    if(path.dirname(environment)!==path.resolve(projectRoot) || !backup.startsWith(path.resolve(projectRoot,'data','backups')+path.sep))throw Error('Invalid environment backup path');
+    fs.mkdirSync(path.dirname(backup),{recursive:true});
+    fs.renameSync(environment,backup);
+    console.log('Previous verifier environment preserved at:',backup);
+  }
+  install(projectRoot,{pythonCommand});
+  const configured=settings(projectRoot,process.env).SIGNATURE_PYTHON;
+  if(configured)console.log('Check your SIGNATURE_PYTHON override; the repaired interpreter is:',path.join(environment,'Scripts','python.exe'));
+  console.log('Signature setup repair complete. Invoice data and Gmail settings were retained.');
+}
 async function main(args=process.argv.slice(2)) {
-  if(args.length>1 || args.some(a=>!['--check','--signatures'].includes(a)))throw Error('Usage: node scripts/setup.js [--check | --signatures]');
+  if(args.length>1 || args.some(a=>!['--check','--signatures','--repair-signatures'].includes(a)))throw Error('Usage: node scripts/setup.js [--check | --signatures | --repair-signatures]');
   if(args[0]==='--check') {const status=collectStatus();showStatus(status);if(!status.extractionReady)process.exitCode=1;return;}
   if(process.platform!=='win32')throw Error('This setup launcher is for Windows PCs. See SETUP.md.');
   if(!supportedNode(process.version))throw Error('Install Node.js 22.x or 24.x. Your Node version is '+process.version+'. See SETUP.md.');
+  if(args[0]==='--repair-signatures') {const release=acquireRunLock(path.join(root,'data'));try{repairSignatures();}finally{release();}return;}
   if(args[0]==='--signatures') {const release=acquireRunLock(path.join(root,'data'));try{setupSignatures();}finally{release();}return;}
   if(!process.stdin.isTTY) {showStatus(collectStatus());return;}
   const prompt=readline.createInterface({input:process.stdin,output:process.stdout});let release;
@@ -140,4 +172,4 @@ async function main(args=process.argv.slice(2)) {
   } finally {release?.();prompt.close();}
 }
 if(require.main===module)main().catch(e=>{console.error('Setup error:',e.message);process.exitCode=1;});
-module.exports={supportedNode,supportedPython,ensureLocalFiles,updateSenders,collectStatus};
+module.exports={supportedNode,supportedPython,ensureLocalFiles,updateSenders,collectStatus,findPython312,repairSignatures};
