@@ -31,6 +31,7 @@ function openStore(dataDir) {
       CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS app_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS print_jobs (invoice_number TEXT PRIMARY KEY, status TEXT NOT NULL, pdf_path TEXT NOT NULL, sha256 TEXT NOT NULL, updated_at TEXT NOT NULL, error TEXT);
+      CREATE TABLE IF NOT EXISTS signature_checks (invoice_number TEXT NOT NULL, source_sha256 TEXT NOT NULL, source_pdf_path TEXT NOT NULL, status TEXT NOT NULL, reason TEXT, checked_at TEXT NOT NULL, result_json TEXT NOT NULL, PRIMARY KEY(invoice_number,source_sha256));
       CREATE TABLE IF NOT EXISTS invoice_numbers (normalized_number TEXT PRIMARY KEY, invoice_id INTEGER NOT NULL UNIQUE REFERENCES invoices(id));
       CREATE INDEX IF NOT EXISTS invoices_number_idx ON invoices(normalized_invoice_number);
       CREATE TABLE IF NOT EXISTS duplicate_attachments (
@@ -132,12 +133,12 @@ function openStore(dataDir) {
     for (const row of rows) if (row.structured_json) atomicWrite(row.json_path, JSON.stringify({...JSON.parse(row.structured_json),normalizedInvoiceNumber:row.normalized_invoice_number,isDuplicate:row.duplicate_of != null,duplicateOf:row.duplicate_of}, null, 2));
     const duplicates = db.prepare('SELECT * FROM duplicate_attachments ORDER BY id').all();
     for (const row of duplicates) atomicWrite(row.json_path,JSON.stringify({...JSON.parse(row.result_json),duplicateOf:row.invoice_id},null,2));
-    const cols=['invoice_number','invoice_date','part_number','quantity','taxable_amount','IRN No'];
+    const cols=['invoice_number','invoice_date','part_number','quantity','taxable_amount','IRN No','email_subject'];
     const concise=[];
     for (const row of rows.filter(r=>r.duplicate_of==null && (r.document_type==='TAX_INVOICE' || !r.document_type))) {
       const items=db.prepare('SELECT part_number,quantity,taxable_amount FROM invoice_line_items WHERE invoice_id=? ORDER BY line_index').all(row.id);
       // Retain a header row for unparsed/legacy invoices; never invent item quantities or amounts.
-      for (const item of items.length?items:[{}]) concise.push({invoice_number:row.invoice_number,invoice_date:row.invoice_date,part_number:item.part_number,quantity:item.quantity==null?'':String(item.quantity).replace(/(\.\d*?[1-9])0+$|\.0+$/,'$1'),taxable_amount:item.taxable_amount,'IRN No':row.irn});
+      for (const item of items.length?items:[{}]) concise.push({invoice_number:row.invoice_number,invoice_date:row.invoice_date,part_number:item.part_number,quantity:item.quantity==null?'':String(item.quantity).replace(/(\.\d*?[1-9])0+$|\.0+$/,'$1'),taxable_amount:item.taxable_amount,'IRN No':row.irn,email_subject:row.subject});
     }
     atomicWrite(path.join(dataDir,'invoices.csv'),[cols.join(','),...concise.map(r=>cols.map(c=>csvCell(r[c])).join(','))].join('\r\n')+'\r\n');
     const duplicateColumns = ['gmail_id','attachment_key','sender','subject','filename','sha256','invoice_number','normalized_invoice_number','duplicate_of','validation_status','pdf_path','json_path','processed_at'];
@@ -151,7 +152,11 @@ function openStore(dataDir) {
     });
     // Downloads can fail before an invoice row exists; include those attachments too.
     for (const row of db.prepare("SELECT a.* FROM attachments a LEFT JOIN invoices i ON i.gmail_id=a.gmail_id AND i.attachment_key=a.attachment_key WHERE a.status='failed' AND i.id IS NULL ORDER BY a.id").all()) failures.push({...row,status:'FAILED',invoice_number:null,pdf_path:null,reason:row.error || 'Attachment processing failed'});
+    const checks=db.prepare('SELECT s.*,i.filename,i.gmail_id,i.attachment_key FROM signature_checks s JOIN invoices i ON i.normalized_invoice_number=s.invoice_number AND i.sha256=s.source_sha256 AND i.duplicate_of IS NULL ORDER BY i.id').all();
+    for (const check of checks.filter(c=>c.status!=='VALID')) failures.push({...check,status:'SIGNATURE_'+check.status,pdf_path:check.source_pdf_path,processed_at:check.checked_at});
     atomicWrite(path.join(dataDir,'failure-report.csv'),[failureColumns.join(','),...failures.map(r=>failureColumns.map(c=>csvCell(r[c])).join(','))].join('\r\n')+'\r\n');
+    const signatureColumns=['invoice_number','filename','status','reason','checked_at','source_pdf_path','source_sha256'];
+    atomicWrite(path.join(dataDir,'signature-report.csv'),[signatureColumns.join(','),...checks.map(r=>signatureColumns.map(c=>csvCell(r[c])).join(','))].join('\r\n')+'\r\n');
   }
   return { db, find, save, markAttachment, exportAll, close: () => db.close() };
 }

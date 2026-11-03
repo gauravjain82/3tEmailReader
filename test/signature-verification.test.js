@@ -1,0 +1,62 @@
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const fs=require('fs');
+const os=require('os');
+const path=require('path');
+const crypto=require('crypto');
+const {spawnSync}=require('child_process');
+const {verifyPdfSignature}=require('../src/services/signatureVerificationService');
+const {printOriginalInvoices}=require('../src/services/printService');
+const {openStore}=require('../src/storage/store');
+const {processText}=require('../src/services/invoiceProcessingService');
+
+function fixture(t) {
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'invoice-signature-node-'));
+  const store=openStore(dir),file=path.join(dir,'original.pdf');fs.writeFileSync(file,'%PDF-1.7 test-only bytes');
+  const hash=crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+  const row=store.save({gmail_id:'m1',attachment_key:'a',filename:'original.pdf',sha256:hash,pdf_path:file},processText('Tax Invoice\nInvoice No: SIG001'));
+  const item={id:row.id,invoiceNumber:'SIG001',pdfPath:file,sha256:hash,sourcePdfPath:file,sourceSha256:hash,pages:[2]};
+  t.after(()=>{store.close();assert.equal(path.dirname(dir),path.resolve(os.tmpdir()));assert.ok(path.basename(dir).startsWith('invoice-signature-node-'));fs.rmSync(dir,{recursive:true,force:true});});
+  return {dir,store,file,hash,item};
+}
+function valid(hash) {return {schemaVersion:1,verifier:'pyHanko-0.33.0',status:'VALID',sha256:hash,reason:'All test checks passed',checkedAt:new Date().toISOString(),signatures:[{status:'VALID',intact:true,cryptographicallyValid:true,trusted:true,coverage:'ENTIRE_FILE'}]};}
+
+test('signature helper accepts only complete verified results for the unchanged source',async t=>{
+  const {file,hash}=fixture(t);let options;
+  const report=await verifyPdfSignature(file,hash,{python:process.execPath,run:async(...args)=>{options=args;return {stdout:JSON.stringify(valid(hash))};}});
+  assert.equal(report.status,'VALID');assert.equal(options[2].windowsHide,true);assert.equal(options[2].shell,undefined);
+  assert.ok(options[1].includes(path.resolve(file)));
+});
+test('missing helper, changed source, malformed output and incomplete approval all block verification',async t=>{
+  const {file,hash,dir}=fixture(t);
+  assert.equal((await verifyPdfSignature(file,'wrong')).status,'INVALID');
+  assert.equal((await verifyPdfSignature(file,hash,{python:path.join(dir,'missing-python.exe')})).status,'ERROR');
+  for(const output of ['not JSON',JSON.stringify({schemaVersion:1,status:'VALID',signatures:[]}),JSON.stringify({...valid(hash),sha256:'different'})]) {
+    assert.equal((await verifyPdfSignature(file,hash,{python:process.execPath,run:async()=>({stdout:output})})).status,'ERROR');
+  }
+});
+test('unverifiable or unsigned signatures are reported without invoking the printer or reserving print jobs',async t=>{
+  const {store,item,dir}=fixture(t);
+  for(const status of ['INVALID','UNKNOWN','UNSIGNED','ERROR']) {
+    const result=await printOriginalInvoices(store,[item],{platform:'win32',findExecutable:()=>assert.fail('Must not invoke printer'),verifySignature:async()=>({status,reason:'Test '+status,checkedAt:new Date().toISOString(),signatures:[]})});
+    assert.equal(result.blocked.length,1);assert.equal(result.submitted.length,0);
+  }
+  assert.equal(store.db.prepare('SELECT count(*) n FROM print_jobs').get().n,0);
+  store.exportAll();assert.match(fs.readFileSync(path.join(dir,'failure-report.csv'),'utf8'),/SIGNATURE_ERROR/);
+  assert.match(fs.readFileSync(path.join(dir,'signature-report.csv'),'utf8'),/SIG001/);
+});
+test('valid signature prints verified complete source bytes and only the first original-recipient page',async t=>{
+  const {store,item,hash,file}=fixture(t);let called=false;
+  const result=await printOriginalInvoices(store,[item],{platform:'win32',findExecutable:()=> 'printer.exe',verifySignature:async()=>valid(hash),run:async(executable,args)=>{
+    called=true;assert.ok(args.includes('2,1x,simplex,fit'));assert.ok(args.includes('-print-to-default'));
+    assert.deepEqual(fs.readFileSync(args.at(-1)),fs.readFileSync(file));
+    assert.equal(store.db.prepare('SELECT status FROM signature_checks').get().status,'VALID');
+  }});
+  assert.equal(called,true);assert.equal(result.submitted.length,1);
+});
+test('real offline cryptographic tests validate, tamper, trust, revocation and unsigned cases',t=>{
+  const python=path.resolve('.signature-venv',process.platform==='win32'?'Scripts/python.exe':'bin/python');
+  if(!fs.existsSync(python))return t.skip('Run Setup Signature Verification.cmd to install the cryptographic test dependency');
+  const result=spawnSync(python,['test/signature_crypto_checks.py'],{encoding:'utf8',windowsHide:true,timeout:60000});
+  assert.equal(result.status,0,result.stderr || result.error?.message);assert.match(result.stderr,/Ran 6 tests/);
+});

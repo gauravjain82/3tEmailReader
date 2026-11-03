@@ -76,13 +76,13 @@ test('a failed database reset restores original exports and records',async t=>{
   assert.deepEqual(fs.readdirSync(path.join(dir,'json')),json);
 });
 
-test('fresh mode retains the bootstrap boundary and the next run contains only new results',async t=>{
+test('fresh mode retains the initial 24-hour boundary and the next run contains only new results',async t=>{
   const {dir,store,metadata,doc}=fixture(t);
   const config={allowedSenders:['billing@example.com'],firstRunAfter:null};
   const baseQuery='in:inbox has:attachment filename:pdf';
-  const until=Date.parse('2026-11-02T00:00:00Z')/1000;
+  const until=Date.parse('2026-11-03T00:00:00Z')/1000;
   const saved=ensureCheckpoint(store,validateConfig(config),baseQuery,until);
-  assert.equal(saved.since,Date.parse('2026-11-01T00:00:00Z')/1000);
+  assert.equal(saved.since,until-86400);
   await clearPreviousResults(store,dir);
   let query;
   const api={users:{messages:{list:async options=>{query=options.q;return {data:{messages:[{id:'new-message'}]}};}}}};

@@ -13,12 +13,12 @@ async function clearPreviousResults(store, dataDir) {
   const manifest = { createdAt:new Date().toISOString(), status:'prepared', database:backupPath,
     invoiceRecords:store.db.prepare('SELECT count(*) n FROM invoices').get().n,
     duplicateAttachments:store.db.prepare('SELECT count(*) n FROM duplicate_attachments').get().n,
-    preserved:['pdfs','attachments','app_state','print_jobs'], archivedFiles:[] };
+    preserved:['pdfs','attachments','app_state','print_jobs','signature_checks'], archivedFiles:[] };
   const manifestPath = path.join(backupDir,'manifest.json');
   atomicWrite(manifestPath,JSON.stringify(manifest,null,2));
   const moved = [];
   try {
-    for (const name of ['json','invoices.csv','duplicates.csv','failure-report.csv']) {
+    for (const name of ['json','invoices.csv','duplicates.csv','failure-report.csv','signature-report.csv']) {
       const source = path.resolve(root,name), target = path.resolve(backupDir,name);
       // Only move these explicitly owned paths inside the active data directory and its backup.
       if (path.dirname(source) !== root || path.dirname(target) !== backupDir) throw Error('Result archive path is outside the data directory');

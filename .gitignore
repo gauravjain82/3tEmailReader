@@ -4,3 +4,6 @@ credentials.json
 token.json
 data/
 config.json
+.signature-venv/
+certificates/
+__pycache__/

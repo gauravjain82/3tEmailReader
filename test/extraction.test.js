@@ -108,7 +108,7 @@ test('reprocessing preserves IDs, metadata and timestamp without duplicate recor
   assert.equal(row.processed_at,first.processed_at); assert.ok(row.reprocessed_at); assert.equal(row.parser_version,require('../src/pdf/parserRegistry').PARSER_VERSION);
   assert.equal(store.db.prepare('SELECT count(*) n FROM extraction_runs').get().n,3);
   assert.equal(JSON.parse(fs.readFileSync(row.json_path)).validation.status,'VALIDATED');
-  assert.equal(fs.readFileSync(path.join(dir,'invoices.csv'),'utf8').split('\r\n')[0],'invoice_number,invoice_date,part_number,quantity,taxable_amount,IRN No');
+  assert.equal(fs.readFileSync(path.join(dir,'invoices.csv'),'utf8').split('\r\n')[0],'invoice_number,invoice_date,part_number,quantity,taxable_amount,IRN No,email_subject');
   assert.equal((await reprocess(store,{status:'FAILED'})).processed,0);
 });
 test('failed or empty re-extraction retains previous values with explicit review/history', async t => {

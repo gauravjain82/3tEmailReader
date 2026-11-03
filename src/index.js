@@ -35,7 +35,7 @@ async function start() {
     const api = gmail();
     const baseQuery = process.env.GMAIL_QUERY || 'in:inbox has:attachment filename:pdf';
     if (mode === 'fresh') {
-      // Establish an upgrade's initial boundary before removing the records used to derive it.
+      // Establish the first-run boundary before clearing results; saved checkpoints stay intact.
       ensureCheckpoint(store,validateConfig(config),baseQuery,Math.floor(Date.now()/1000));
       await clearPreviousResults(store,dataDir);
     }

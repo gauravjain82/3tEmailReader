@@ -15,16 +15,16 @@ test('IRN supports labeled single-line, wrapped, repeated and conflicting refere
   const conflict=extractIrn('IRN: '+irn+'\nIRN: '+'a'.repeat(64));assert.equal(conflict.irn,null);assert.equal(conflict.irnCandidates.length,2);
   assert.ok(processText('Tax Invoice\nInvoice No: INV001\nIRN: '+irn+'\nIRN: '+'a'.repeat(64)).validation.issues.some(i=>i.field==='irn'));
 });
-test('CSV has exactly six columns and one row per item, omitting duplicate and logistics records',t=>{
+test('CSV includes the email subject on each item and omits duplicate and logistics records',t=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'invoice-csv-test-'));const store=openStore(dir);
   t.after(()=>{store.close();assert.equal(path.dirname(dir),path.resolve(os.tmpdir()));assert.ok(path.basename(dir).startsWith('invoice-csv-test-'));fs.rmSync(dir,{recursive:true,force:true});});
   const doc=processText('Tax Invoice\nInvoice No: INV001\nInvoice Date: 26/10/2026\nIRN No: '+irn);
   doc.lineItems=[{partNumber:'PART001',quantity:'200.000000',taxableAmount:'32920.00'},{partNumber:'PART002',quantity:'2.500000',taxableAmount:'12.50'}];
-  const meta=id=>({gmail_id:id,attachment_key:'a',filename:'invoice.pdf'});
+  const meta=id=>({gmail_id:id,attachment_key:'a',filename:'invoice.pdf',subject:'Invoices, "November"'});
   const row=store.save(meta('original'),doc);store.save(meta('duplicate'),doc);store.save(meta('bin'),processText('Bin No 1 QTY/BIN 10'));
   store.exportAll();
   const csv=fs.readFileSync(path.join(dir,'invoices.csv'),'utf8').trim().split('\r\n');
-  assert.deepEqual(csv,['invoice_number,invoice_date,part_number,quantity,taxable_amount,IRN No',`INV001,2026-10-26,PART001,200,32920.00,${irn}`,`INV001,2026-10-26,PART002,2.5,12.50,${irn}`]);
+  assert.deepEqual(csv,['invoice_number,invoice_date,part_number,quantity,taxable_amount,IRN No,email_subject',`INV001,2026-10-26,PART001,200,32920.00,${irn},"Invoices, ""November"""`,`INV001,2026-10-26,PART002,2.5,12.50,${irn},"Invoices, ""November"""`]);
   assert.equal(store.db.prepare('SELECT irn FROM invoices WHERE id=?').get(row.id).irn,irn);
   store.save(meta('original'),{...doc,irn:null},{reprocess:true});assert.equal(store.db.prepare('SELECT irn FROM invoices WHERE id=?').get(row.id).irn,irn);
 });

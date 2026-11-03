@@ -14,6 +14,7 @@ const {printOriginalInvoices,findSumatra} = require('../src/services/printServic
 const {chooseInvoiceAction} = require('../src/services/invoiceOutputService');
 const {runOnce} = require('../src/services/runOnceService');
 const {clearPreviousResults} = require('../src/services/freshResultsService');
+const mockSignatureValid=async()=>({status:'VALID',reason:'Mocked signature check for printer submission tests',checkedAt:new Date().toISOString(),signatures:[]});
 
 function fixture(t) {
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'invoice-original-test-'));
@@ -29,8 +30,8 @@ async function pdfBytes(labels) {
   return Buffer.from(await doc.save());
 }
 async function readPages(bytes) {const parser=new PDFParse({data:new Uint8Array(bytes)});try{return (await parser.getText()).pages;}finally{await parser.destroy();}}
-async function seed(t) {
-  const f=fixture(t);const bytes=await pdfBytes(['Original For Recipient','Duplicate For Transporter','Triplicate For Supplier']);
+async function seed(t,labels=['Original For Recipient','Duplicate For Transporter','Triplicate For Supplier']) {
+  const f=fixture(t);const bytes=await pdfBytes(labels);
   const source=path.join(f.dir,'source.pdf');fs.writeFileSync(source,bytes);
   const meta={gmail_id:'m1',attachment_key:'part-1',sender:'billing@example.com',filename:'invoice.pdf',pdf_path:source,sha256:crypto.createHash('sha256').update(bytes).digest('hex'),source_run_id:'test-run'};
   const doc=processText(text('Original For Recipient'));
@@ -61,18 +62,19 @@ test('source hash mismatch blocks saving or printing a changed download',async t
   const {store,dir,source,selection}=await seed(t);fs.writeFileSync(source,'modified');
   const report=await saveOriginalInvoices(store,dir,selection);assert.equal(report.invoices.length,0);assert.match(report.skipped[0].reason,/SHA-256/);
 });
-test('printing submits one copy through the default printer and skips repeat attempts, including after fresh reset',async t=>{
-  const {store,dir,selection}=await seed(t);const report=await saveOriginalInvoices(store,dir,selection);const calls=[];
-  const options={platform:'win32',findExecutable:()=> 'C:\\SumatraPDF.exe',run:async(...args)=>{calls.push(args);}};
+test('printing submits only page one through the default printer and skips repeat attempts, including after fresh reset',async t=>{
+  const {store,dir,selection}=await seed(t,['Original For Recipient','Continuation page','Duplicate For Transporter']);const report=await saveOriginalInvoices(store,dir,selection);const calls=[];
+  assert.equal((await PDFDocument.load(fs.readFileSync(report.invoices[0].pdfPath))).getPageCount(),2);
+  const options={platform:'win32',findExecutable:()=> 'C:\\SumatraPDF.exe',verifySignature:mockSignatureValid,run:async(...args)=>{calls.push(args);}};
   const result=await printOriginalInvoices(store,report.invoices,options);assert.equal(result.submitted.length,1);assert.equal(calls.length,1);
-  assert.ok(calls[0][1].includes('-print-to-default'));assert.ok(calls[0][1].includes('1x,simplex,fit'));assert.equal(calls[0][2].windowsHide,true);assert.equal(calls[0][2].shell,undefined);
+  assert.ok(calls[0][1].includes('-print-to-default'));assert.ok(calls[0][1].includes('1,1x,simplex,fit'));assert.equal(calls[0][2].windowsHide,true);assert.equal(calls[0][2].shell,undefined);
   assert.equal((await printOriginalInvoices(store,report.invoices,options)).skipped.length,1);assert.equal(calls.length,1);
   await clearPreviousResults(store,dir);
   assert.equal((await printOriginalInvoices(store,report.invoices,options)).skipped.length,1);assert.equal(calls.length,1);
 });
 test('uncertain printer results are recorded and not automatically printed again',async t=>{
   const {store,dir,selection}=await seed(t);const report=await saveOriginalInvoices(store,dir,selection);let calls=0;
-  const options={platform:'win32',findExecutable:()=> 'C:\\SumatraPDF.exe',run:async()=>{calls++;throw Error('Printer timed out');}};
+  const options={platform:'win32',findExecutable:()=> 'C:\\SumatraPDF.exe',verifySignature:mockSignatureValid,run:async()=>{calls++;throw Error('Printer timed out');}};
   assert.equal((await printOriginalInvoices(store,report.invoices,options)).uncertain.length,1);
   assert.equal(store.db.prepare('SELECT status FROM print_jobs').get().status,'uncertain');
   assert.equal((await printOriginalInvoices(store,report.invoices,options)).skipped.length,1);assert.equal(calls,1);
@@ -80,7 +82,7 @@ test('uncertain printer results are recorded and not automatically printed again
 test('missing printing utility does not reserve jobs; altered prepared PDFs are not submitted',async t=>{
   const {store,dir,selection}=await seed(t);const report=await saveOriginalInvoices(store,dir,selection);
   assert.throws(()=>findSumatra({}),/Install SumatraPDF/);
-  await assert.rejects(printOriginalInvoices(store,report.invoices,{platform:'win32',findExecutable:()=>{throw Error('Missing utility');}}),/Missing utility/);
+  await assert.rejects(printOriginalInvoices(store,report.invoices,{platform:'win32',verifySignature:mockSignatureValid,findExecutable:()=>{throw Error('Missing utility');}}),/Missing utility/);
   assert.equal(store.db.prepare('SELECT count(*) n FROM print_jobs').get().n,0);
   fs.writeFileSync(report.invoices[0].pdfPath,'changed');
   const result=await printOriginalInvoices(store,report.invoices,{platform:'win32',findExecutable:()=> 'fake.exe',run:async()=>assert.fail('Must not print')});
@@ -119,7 +121,9 @@ test('actual FST, HUB and Astemo PDFs select only recipient pages',async t=>{
     const row=f.store.save({gmail_id:file,attachment_key:'part-1',filename:suffix,pdf_path:source,sha256:crypto.createHash('sha256').update(bytes).digest('hex'),source_run_id:'actual-samples'},processText(pages.map(p=>p.text).join('\n')));
     const report=await saveOriginalInvoices(f.store,f.dir,{runId:'actual-samples',invoiceIds:[row.id]});
     assert.equal(report.skipped.length,0,suffix);assert.equal(report.invoices.length,1,suffix);
-    assert.equal((await PDFDocument.load(fs.readFileSync(report.invoices[0].pdfPath))).getPageCount(),1);
+    const exported=fs.readFileSync(report.invoices[0].pdfPath);
+    if(report.invoices[0].signedOriginalPreserved)assert.deepEqual(exported,bytes);
+    else assert.equal((await PDFDocument.load(exported)).getPageCount(),1);
     assert.deepEqual(fs.readFileSync(source),bytes);
   }
   if(!available)t.skip('Local invoice PDFs unavailable');

@@ -58,13 +58,29 @@ test('list failure leaves the initial checkpoint durable for a retry',async t=>{
   await assert.rejects(runOnce({store,dataDir:dir,config,now:()=>200000,api}),/Request failed/);
   assert.equal(state(store).since,100);
 });
-test('configuration changes have independent checkpoints and bootstrap uses receipt time',t=>{
+test('first run defaults to the last 24 hours regardless of historical receipt times',t=>{
   const {store}=fixture(t);
   store.save({...meta('m'),sender:'Supplier <billing@example.com>',received_at:'2026-11-01T00:00:00Z'},processText('Tax Invoice\nInvoice No: BOOT001'));
   const parsed=validateConfig({allowedSenders:['billing@example.com']});
-  assert.equal(initialSince(store,parsed),Date.parse('2026-11-01T00:00:00Z')/1000);
-  assert.equal(initialSince(store,validateConfig({allowedSenders:['new@example.com']})),0);
+  const until=Date.parse('2026-11-03T12:00:00Z')/1000;
+  assert.equal(initialSince(store,parsed,until),until-86400);
+  assert.equal(initialSince(store,validateConfig({allowedSenders:['new@example.com']}),until),until-86400);
+  assert.equal(initialSince(store,validateConfig(config),until),100);
   assert.notEqual(checkpointKey(parsed,'has:attachment'),checkpointKey(validateConfig({allowedSenders:['new@example.com']}),'has:attachment'));
+});
+test('first-run 24-hour boundary is retained after failure and subsequent runs use checkpoints',async t=>{
+  const {dir,store}=fixture(t);const firstNow=Date.parse('2026-11-03T12:00:00Z');const queries=[];
+  const cfg={allowedSenders:['billing@example.com'],firstRunAfter:null};
+  const opts={store,dataDir:dir,config:cfg,now:()=>firstNow,api:apiWithPages([{messages:[{id:'bad'}]}],queries),handleMessage:async()=>({failed:true})};
+  await assert.rejects(runOnce(opts),/checkpoint was not advanced/);
+  const firstSince=firstNow/1000-86400;assert.equal(state(store).since,firstSince);
+  assert.match(queries[0].q,new RegExp('after:'+(firstSince-1)+' before:'+firstNow/1000+'$'));
+  const retryNow=firstNow+3*86400000;const retryQueries=[];
+  await runOnce({...opts,now:()=>retryNow,api:apiWithPages([{}],retryQueries)});
+  assert.match(retryQueries[0].q,new RegExp('after:'+(firstSince-1)+' before:'+retryNow/1000+'$'));
+  assert.equal(state(store).since,retryNow/1000);
+  const nextQueries=[];await runOnce({...opts,now:()=>retryNow+10000,api:apiWithPages([{}],nextQueries)});
+  assert.match(nextQueries[0].q,new RegExp('after:'+(retryNow/1000-1)+' before:'+(retryNow/1000+10)+'$'));
 });
 test('a second launch is blocked until the current run releases its lock',t=>{
   const {dir}=fixture(t);const unlock=acquireRunLock(dir);assert.throws(()=>acquireRunLock(dir),/already active/);unlock();const second=acquireRunLock(dir);second();assert.equal(fs.existsSync(path.join(dir,'extractor.lock')),false);

@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { senderAddress, validateConfig } = require('../config');
+const { validateConfig } = require('../config');
 const { processMessage, withRetry } = require('../gmail/processMessage');
 const { atomicWrite } = require('../storage/store');
 
@@ -29,17 +29,11 @@ function acquireRunLock(dataDir) {
 function checkpointKey(config, baseQuery) {
   return 'gmail-run:' + crypto.createHash('sha256').update(JSON.stringify({senders:config.allowedSenders,baseQuery})).digest('hex');
 }
-function initialSince(store, config) {
+function initialSince(store, config, until=Math.floor(Date.now()/1000)) {
   if (config.firstRunAfter != null) return config.firstRunAfter;
-  // Bootstrap upgraded installations from the last received message, never from reprocessing time.
-  let latest = 0;
-  for (const row of store.db.prepare('SELECT sender,received_at FROM invoices WHERE received_at IS NOT NULL').all()) {
-    if (config.allowedSenders.includes(senderAddress(row.sender))) {
-      const seconds = Math.floor(Date.parse(row.received_at)/1000);
-      if (Number.isFinite(seconds)) latest = Math.max(latest,seconds);
-    }
-  }
-  return latest;
+  // Only the first run uses this rolling window. Persist it before processing
+  // so failures/retries never slide the boundary forward and miss older mail.
+  return Math.max(0,until-24*60*60);
 }
 function buildQuery(baseQuery, senders, since, until) {
   return `(${baseQuery}) {${senders.map(s=>'from:'+s).join(' ')}} after:${Math.max(0,since-1)} before:${until}`;
@@ -48,7 +42,7 @@ function ensureCheckpoint(store, config, baseQuery, until) {
   const key = checkpointKey(config,baseQuery);
   let checkpoint = store.db.prepare('SELECT value FROM app_state WHERE key=?').get(key);
   if (!checkpoint) {
-    const since = initialSince(store,config);
+    const since = initialSince(store,config,until);
     if (since > until) throw Error('The initial start date is in the future. Check config.json and the system clock.');
     store.db.prepare('INSERT INTO app_state(key,value) VALUES (?,?)').run(key,JSON.stringify({since}));
     checkpoint = store.db.prepare('SELECT value FROM app_state WHERE key=?').get(key);
