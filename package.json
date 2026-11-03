@@ -1,0 +1,9 @@
+{
+  "name": "gmail-pdf-extractor",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {"auth":"node src/auth.js", "start":"node src/index.js", "reprocess":"node src/services/reprocessingService.js", "verify:local":"node scripts/verify-local.js", "test":"node --test"},
+  "dependencies": {"googleapis":"^144.0.0", "pdf-parse":"2.4.5", "better-sqlite3":"^11.8.1", "dotenv":"^16.4.7"},
+  "engines":{"node":">=20"}
+}
