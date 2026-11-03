@@ -105,10 +105,10 @@ test('reprocessing preserves IDs, metadata and timestamp without duplicate recor
   assert.equal(store.db.prepare('SELECT count(*) n FROM invoices').get().n,1);
   assert.equal(store.db.prepare('SELECT count(*) n FROM invoice_line_items').get().n,1);
   assert.equal(row.id,first.id); assert.equal(row.sender,meta.sender); assert.equal(row.subject,meta.subject); assert.equal(row.sha256,meta.sha256);
-  assert.equal(row.processed_at,first.processed_at); assert.ok(row.reprocessed_at); assert.equal(row.parser_version,'2.0.0');
+  assert.equal(row.processed_at,first.processed_at); assert.ok(row.reprocessed_at); assert.equal(row.parser_version,require('../src/pdf/parserRegistry').PARSER_VERSION);
   assert.equal(store.db.prepare('SELECT count(*) n FROM extraction_runs').get().n,3);
   assert.equal(JSON.parse(fs.readFileSync(row.json_path)).validation.status,'VALIDATED');
-  assert.match(fs.readFileSync(path.join(dir,'invoices.csv'),'utf8'),/line_items_json/);
+  assert.equal(fs.readFileSync(path.join(dir,'invoices.csv'),'utf8').split('\r\n')[0],'invoice_number,invoice_date,part_number,quantity,taxable_amount,IRN No');
   assert.equal((await reprocess(store,{status:'FAILED'})).processed,0);
 });
 test('failed or empty re-extraction retains previous values with explicit review/history', async t => {
@@ -164,7 +164,7 @@ test('export interruption preserves committed results and exports can be recover
   fs.mkdirSync(path.join(dir,'invoices.csv'));
   assert.throws(()=>store.exportAll()); assert.equal(store.find(meta.gmail_id,meta.attachment_key).status,'done');
   fs.rmdirSync(path.join(dir,'invoices.csv')); store.exportAll();
-  assert.ok(fs.readFileSync(path.join(dir,'invoices.csv'),'utf8').includes('VALIDATED'));
+  assert.ok(fs.readFileSync(path.join(dir,'invoices.csv'),'utf8').includes('12627110031'));
 });
 test('retained invoice reference on a logistics document remains NOT_APPLICABLE', t => {
   const {store,dir}=tempStore(t); const meta=metadata(dir,Buffer.from('legacy'));

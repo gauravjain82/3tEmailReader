@@ -29,6 +29,50 @@ npm start
 
 **Security:** Keep `credentials.json`, `token.json`, `.env` and the `data` folder private. Never commit them to Git. Token refresh behavior for apps in Google OAuth **Testing** status may require periodic reauthorization (often after 7 days for external testing apps). For ongoing production use, configure an appropriate published OAuth app and follow Google's verification requirements.
 
+## Choose previous or new results
+
+Double-click `Run Invoice Extractor.cmd` and choose:
+
+1. **Keep previous results and add new invoices** (default): CSV/JSON results continue to accumulate.
+2. **New results only**: back up and clear previous active invoice results, then process the next email batch.
+3. **Cancel**: exit without starting a batch.
+
+Fresh mode first saves a complete SQLite backup and moves the old JSON/CSV exports into `data/backups/fresh-results-<timestamp>-<id>/`. It clears active invoice headers, line items, extraction history, duplicate results and invoice-number claims, then creates empty active CSVs. It retains all original downloaded PDFs in `data/pdfs/`, successful attachment tracking and the last-run checkpoint. Therefore it still reads emails since the last successful run and does not reload old processed attachments. Invoice-number checks start again within the fresh result set. If no new emails exist, the new CSVs contain only their headers.
+
+If the database reset fails, its transaction rolls back and archived exports are moved back. If email reading fails after a successful reset, the previous results remain available in the backup and the checkpoint is unchanged for a retry. Close CSVs open in Excel before selecting fresh mode, as Windows may prevent moving a locked export.
+
+`npm start` also presents the menu in an interactive terminal. For scripts, choose explicitly:
+
+```powershell
+npm start -- --keep
+npm start -- --fresh
+```
+
+Without a terminal, `npm start` defaults to keeping previous results. `--choose` explicitly requests the menu. Fresh mode runs only when selected; installing this update does not clear current results.
+
+## Save or print original invoices
+
+After a successful batch with new unique invoices, the launcher offers **Finish**, **Save originals**, **Print originals**, or **Save and print**. These actions cover only invoices added in that run, including records recovered when retrying an interrupted batch. Earlier saved invoices, duplicate-number attachments, bin tags and other non-invoice documents are excluded. Printing is never automatic; Enter finishes without printing.
+
+Original-only PDFs are saved under `data/original-invoices/<run-id>/`, with one file per invoice number and a `manifest.json`. The app copies the original recipient pages from the attachment, preserving their page content, rather than rebuilding an invoice from CSV values. Duplicate/transporter/triplicate/extra-copy pages are excluded. Original pages may include continuation pages. Unmarked single-page invoices can be included when their invoice number matches; ambiguous multi-page PDFs or conflicting invoice numbers are skipped with a reason. Complete, unchanged attachments remain in `data/pdfs/`; a page-only copy is a new PDF and does not retain the source file's digital signature.
+
+To save or print the **last completed batch** later without reading Gmail again, double-click `Original Invoices.cmd`, or run:
+
+```powershell
+npm run originals -- --save
+npm run originals -- --print
+```
+
+The last-batch selection is replaced on each successful email run, including a run with no new invoices. Save/print failures do not rewind the email checkpoint. A source SHA-256 check prevents exporting changed downloads.
+
+For direct printing, install [SumatraPDF](https://www.sumatrapdfreader.org/free-pdf-reader) on each Windows PC and set its attached physical printer as the **Windows default printer**. The app detects standard SumatraPDF install locations; for a portable/custom installation, set its path in that PC's `.env`:
+
+```ini
+SUMATRA_PDF=C:\Program Files\SumatraPDF\SumatraPDF.exe
+```
+
+Printing uses [SumatraPDF's documented default-printer command](https://www.sumatrapdfreader.org/docs/Command-line-arguments), with exactly one copy per invoice. A persistent `print_jobs` table prevents submitting the same invoice number again, even after selecting fresh results. Submission success means the printer command completed; it does not prove paper was physically produced. Interrupted or uncertain submissions are not automatically retried: check the Windows print queue before printing those files manually. Tests mock printer submissions; they do not send physical print jobs.
+
 ## Filtering
 Edit `config.json` to list the exact sender email addresses you want to process:
 
@@ -61,9 +105,13 @@ Every result page is processed. `POLL_SECONDS` and `MAX_MESSAGES_PER_POLL` are n
 - `data/json/`: one JSON document per attachment
 - `data/invoices.csv`: main export, excluding repeated invoice numbers
 - `data/duplicates.csv`: historical and newly detected duplicates with links to their original invoice records
+- `data/failure-report.csv`: failed attachments and invoices needing review, with filenames, statuses and reasons (header-only when no issues exist)
+- `data/original-invoices/`: selected original-recipient invoice PDFs, grouped by run
 - `data/invoices.db`: SQLite database, tables `invoices` and `attachments`
 
 The `attachments` table tracks download/extraction attempts. Failed attachments are retried on the next manual run; a retained local PDF is reused. `done` means the processing attempt completed; check `validation_status` before using any record for accounting. Never delete tracking rows to reprocess files. Use the local command below.
+
+`failure-report.csv` is regenerated with the other exports. It distinguishes `FAILED` (download/extraction failed) from `NEEDS_REVIEW` (fields were extracted but validation needs attention), and includes download failures that occurred before an invoice record could be created. Historical duplicate invoice rows are omitted from this report; their provenance remains in `duplicates.csv`. Fresh mode archives this report along with old CSV/JSON results. Printer submission results are recorded separately in `print_jobs` and the original-PDF batch's `print-result.json`.
 
 ## Invoice-number duplicate checks
 
@@ -74,7 +122,7 @@ New attachments with an existing invoice number are downloaded and retained, but
 The migration preserves historical invoice rows and IDs, marks repeat numbers with `duplicate_of`, and excludes them from the main CSV. It chooses an existing validated record first, otherwise a review record, otherwise the earliest available record. Subsequent runs keep that canonical record stable. An `invoice_numbers` table enforces a single canonical record per normalized number transactionally. Duplicate-number matching is global, including if suppliers reuse the same number; review the separate duplicates export in those cases.
 
 ## Limitations and production notes
-- FST and Motherson/HUB layouts have dedicated parsers checked against local PDFs. Other layouts use a conservative generic fallback and require review. Astemo samples currently use that fallback; their line-item tables and party roles need a dedicated parser.
+- FST, Motherson/HUB and MAHLE layouts have dedicated parsers checked against local PDFs. The supplied signed MAHLE single-item format also needs decoding of its embedded private-use font mapping; this conversion is gated on MAHLE's known document labels and was checked against rendered PDF pages. Unknown symbol fonts are left unchanged for review. MAHLE's observed two-digit years are interpreted as 20xx; unsupported/multiple-item layouts require review. Other layouts use a conservative generic fallback. Astemo samples currently use that fallback; their line-item tables and party roles need a dedicated parser.
 - Image-only/scanned PDFs are marked failed: integrate OCR for these. Password-protected PDFs may also fail.
 - No messages are deleted, labeled, or marked read. The app requests Gmail **read-only** scope.
 - JSON and CSV are regenerated from committed SQLite data at the end of each batch. Export errors (for example, a CSV locked by Excel) do not invalidate committed extractions or advance the checkpoint. Close the locking application and launch again to recover exports.
@@ -108,7 +156,7 @@ Each result includes explicit `validation.issues`, `validation.checks`, parser n
 
 New monetary fields are canonical decimal **strings**, stored as SQLite `TEXT` and exported as strings in JSON. Arithmetic uses scaled `BigInt`; no monetary calculations use floating-point numbers. Quantities and unit prices retain up to six decimal places. Grand totals and header/item sums must reconcile exactly; rate-derived values allow one paisa for rounding. Observed FST PDFs with whole-rupee rounding or quantity/rate differences remain flagged for review. Discounts, non-unit pricing bases, extra charges and unrecognized rounding conventions require further layout-specific rules.
 
-Existing main CSV columns remain first, followed by party/header fields, document type, validation, parser/version, reprocessing time, source attachment identifiers, normalized invoice number, duplicate reference and `line_items_json`. Formula-like CSV cells are escaped for spreadsheet safety. JSON retains the original camelCase metadata/field names and adds `lineItems`, roles, validation and duplicate indicators.
+The main CSV has exactly six columns: `invoice_number`, `invoice_date`, `part_number`, `quantity`, `taxable_amount`, and `IRN No`. It contains one row per invoice line item, excluding duplicate invoices and non-invoice documents. Taxable amount is the line item's amount before taxes. Invoice date uses ISO `YYYY-MM-DD`. A header-only/legacy invoice with no extracted items has blank item columns rather than invented values. Missing IRNs remain blank; IRNs are extracted from labeled 64-character hexadecimal references, including wrapped text. Conflicting IRNs require review. Existing records need local reprocessing to populate newly added IRNs. Formula-like CSV cells are escaped for spreadsheet safety. Full metadata, validation, line items and other extracted fields remain in JSON and SQLite; `duplicates.csv` retains its separate audit columns.
 
 ## SQLite migration and recovery
 
@@ -140,7 +188,7 @@ Use unfiltered reprocessing first: legacy records have no document type/status. 
 
 ## Tests and local verification
 
-`npm test` uses Node's built-in test runner with isolated temporary databases. It covers classification, identifiers, GSTIN checks, vendor codes, line items/copy deduplication, malformed fields, exact arithmetic, migrations, metadata preservation, repeated reprocessing, tampered files, export recovery, quota retries, stable attachment tracking, invoice-number duplicate prevention, exact sender filtering, pagination, single-run checkpoints, failed-run recovery and overlapping launch prevention. Real local FST, HUB, bin-tag and colour-code PDFs are used when available; those cases explicitly skip when PDFs are absent. No credentials or Gmail calls are needed.
+`npm test` uses Node's built-in test runner with isolated temporary databases. It covers classification, identifiers, GSTIN checks, vendor codes, line items/copy deduplication, malformed fields, exact arithmetic, migrations, metadata preservation, repeated reprocessing, tampered files, export recovery, quota retries, stable attachment tracking, invoice-number duplicate prevention, exact sender filtering, pagination, single-run checkpoints, failed-run recovery, overlapping launch prevention, fresh-results backup/rollback, original-recipient page selection, current-run export and printer submission deduplication. Real local FST, HUB, Astemo, bin-tag and colour-code PDFs are used when available; those cases explicitly skip when PDFs are absent. No credentials, Gmail calls or physical print jobs are needed.
 
 ```powershell
 npm run verify:local

@@ -21,7 +21,7 @@ async function withRetry(call, sleep = ms => new Promise(resolve => setTimeout(r
     }
   }
 }
-async function processMessage(api, id, store, dataDir, {allowedSenders,exportAfter=true} = {}) {
+async function processMessage(api, id, store, dataDir, {allowedSenders,exportAfter=true,runId} = {}) {
   const response = await withRetry(() => api.users.messages.get({ userId:'me', id, format:'full' }));
   const m = response.data;
   const sender = header(m.payload?.headers,'from'), subject = header(m.payload?.headers,'subject');
@@ -43,6 +43,7 @@ async function processMessage(api, id, store, dataDir, {allowedSenders,exportAft
     const old = store.db.prepare('SELECT * FROM invoices WHERE gmail_id=? AND attachment_key=?').get(id,key);
     const received = Number(m.internalDate);
     const meta = { gmail_id:id, attachment_key:key, attachment_source_id:p.body?.attachmentId || null, attachment_part_id:p.partId ?? String(index), sender, subject, filename:name, sha256:old?.sha256 || null, received_at:Number.isFinite(received) ? new Date(received).toISOString() : null };
+    meta.source_run_id = runId || null;
     try {
       let bytes;
       if (old?.pdf_path && fs.existsSync(old.pdf_path)) {

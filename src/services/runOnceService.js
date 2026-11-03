@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { senderAddress, validateConfig } = require('../config');
 const { processMessage, withRetry } = require('../gmail/processMessage');
+const { atomicWrite } = require('../storage/store');
 
 function acquireRunLock(dataDir) {
   fs.mkdirSync(dataDir,{recursive:true});
@@ -43,10 +44,8 @@ function initialSince(store, config) {
 function buildQuery(baseQuery, senders, since, until) {
   return `(${baseQuery}) {${senders.map(s=>'from:'+s).join(' ')}} after:${Math.max(0,since-1)} before:${until}`;
 }
-async function runOnce({api,store,dataDir,config,baseQuery='in:inbox has:attachment filename:pdf',pageSize=50,now=()=>Date.now(),handleMessage=processMessage}) {
-  config = validateConfig(config);
+function ensureCheckpoint(store, config, baseQuery, until) {
   const key = checkpointKey(config,baseQuery);
-  const until = Math.floor(now()/1000);
   let checkpoint = store.db.prepare('SELECT value FROM app_state WHERE key=?').get(key);
   if (!checkpoint) {
     const since = initialSince(store,config);
@@ -56,6 +55,15 @@ async function runOnce({api,store,dataDir,config,baseQuery='in:inbox has:attachm
   }
   const {since} = JSON.parse(checkpoint.value);
   if (!Number.isSafeInteger(since) || since < 0 || since > until) throw Error('Invalid saved run checkpoint or system clock.');
+  return {key,since};
+}
+async function runOnce({api,store,dataDir,config,baseQuery='in:inbox has:attachment filename:pdf',pageSize=50,now=()=>Date.now(),handleMessage=processMessage}) {
+  config = validateConfig(config);
+  const until = Math.floor(now()/1000);
+  const {key,since} = ensureCheckpoint(store,config,baseQuery,until);
+  const pending = JSON.parse(store.db.prepare('SELECT value FROM app_state WHERE key=?').get(key).value);
+  const runId = pending.pendingRunId || crypto.randomUUID();
+  store.db.prepare('UPDATE app_state SET value=? WHERE key=?').run(JSON.stringify({...pending,pendingRunId:runId}),key);
   const query = buildQuery(baseQuery,config.allowedSenders,since,until);
   const summary = { messagesChecked:0, skippedSenders:0, failedMessages:0, since, until };
   console.log('Reading configured senders once. Window:',new Date(since*1000).toISOString(),'to',new Date(until*1000).toISOString());
@@ -68,7 +76,7 @@ async function runOnce({api,store,dataDir,config,baseQuery='in:inbox has:attachm
       if (seen.has(message.id)) continue;
       seen.add(message.id);
       try {
-        const result = await handleMessage(api,message.id,store,dataDir,{allowedSenders:config.allowedSenders,exportAfter:false});
+        const result = await handleMessage(api,message.id,store,dataDir,{allowedSenders:config.allowedSenders,exportAfter:false,runId});
         if (result?.failed) summary.failedMessages++;
         if (result?.skippedSender) summary.skippedSenders++;
       } catch (e) { summary.failedMessages++; console.error('Message error:',message.id,e.message); }
@@ -80,8 +88,11 @@ async function runOnce({api,store,dataDir,config,baseQuery='in:inbox has:attachm
   } while (pageToken);
   store.exportAll();
   if (summary.failedMessages) throw Error(`${summary.failedMessages} message(s) failed. The checkpoint was not advanced; double-click the CMD file again to retry.`);
+  summary.runId = runId;
+  summary.invoiceIds = store.db.prepare("SELECT id FROM invoices WHERE source_run_id=? AND duplicate_of IS NULL AND document_type='TAX_INVOICE' AND normalized_invoice_number IS NOT NULL AND validation_status IN ('VALIDATED','NEEDS_REVIEW') ORDER BY id").all(runId).map(r=>r.id);
+  atomicWrite(path.join(dataDir,'last-run-invoices.json'),JSON.stringify({runId,invoiceIds:summary.invoiceIds,completedAt:new Date(now()).toISOString()},null,2));
   store.db.prepare('UPDATE app_state SET value=? WHERE key=?').run(JSON.stringify({since:until,lastSuccessfulRun:new Date(now()).toISOString()}),key);
   console.log('Run complete:',JSON.stringify(summary));
   return summary;
 }
-module.exports = { runOnce, acquireRunLock, checkpointKey, buildQuery, initialSince };
+module.exports = { runOnce, acquireRunLock, checkpointKey, buildQuery, initialSince, ensureCheckpoint };

@@ -2,7 +2,9 @@ const { extractText } = require('../pdf/extractText');
 const { detectDocumentType } = require('../pdf/detectDocumentType');
 const { parseInvoice, PARSER_VERSION } = require('../pdf/parserRegistry');
 const { validateInvoice } = require('../pdf/validators/invoiceValidator');
+const { normalizePdfText } = require('../pdf/normalizePdfText');
 function processText(text) {
+  text=normalizePdfText(text);
   const classification = detectDocumentType(text);
   const doc = classification.type === 'TAX_INVOICE' || classification.type === 'UNKNOWN'
     ? parseInvoice(text)

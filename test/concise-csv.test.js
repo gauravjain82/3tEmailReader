@@ -1,0 +1,42 @@
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const fs=require('fs');
+const os=require('os');
+const path=require('path');
+const {extractIrn}=require('../src/pdf/extractIrn');
+const {processText}=require('../src/services/invoiceProcessingService');
+const {openStore}=require('../src/storage/store');
+const irn='0123456789abcdef'.repeat(4);
+test('IRN supports labeled single-line, wrapped, repeated and conflicting references',()=>{
+  assert.equal(extractIrn('IRN No. : '+irn).irn,irn);
+  assert.equal(extractIrn('IRN:\n'+irn.slice(0,24)+'\n'+irn.slice(24,48)+'\n'+irn.slice(48)).irn,irn);
+  assert.equal(extractIrn('IRN: '+irn+'\nIRN No: '+irn).irn,irn);
+  for(const value of ['GSTIN',irn.slice(1),irn+'0',irn.slice(0,63)+'G'])assert.equal(extractIrn('IRN: '+value).irn,null);
+  const conflict=extractIrn('IRN: '+irn+'\nIRN: '+'a'.repeat(64));assert.equal(conflict.irn,null);assert.equal(conflict.irnCandidates.length,2);
+  assert.ok(processText('Tax Invoice\nInvoice No: INV001\nIRN: '+irn+'\nIRN: '+'a'.repeat(64)).validation.issues.some(i=>i.field==='irn'));
+});
+test('CSV has exactly six columns and one row per item, omitting duplicate and logistics records',t=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'invoice-csv-test-'));const store=openStore(dir);
+  t.after(()=>{store.close();assert.equal(path.dirname(dir),path.resolve(os.tmpdir()));assert.ok(path.basename(dir).startsWith('invoice-csv-test-'));fs.rmSync(dir,{recursive:true,force:true});});
+  const doc=processText('Tax Invoice\nInvoice No: INV001\nInvoice Date: 26/10/2026\nIRN No: '+irn);
+  doc.lineItems=[{partNumber:'PART001',quantity:'200.000000',taxableAmount:'32920.00'},{partNumber:'PART002',quantity:'2.500000',taxableAmount:'12.50'}];
+  const meta=id=>({gmail_id:id,attachment_key:'a',filename:'invoice.pdf'});
+  const row=store.save(meta('original'),doc);store.save(meta('duplicate'),doc);store.save(meta('bin'),processText('Bin No 1 QTY/BIN 10'));
+  store.exportAll();
+  const csv=fs.readFileSync(path.join(dir,'invoices.csv'),'utf8').trim().split('\r\n');
+  assert.deepEqual(csv,['invoice_number,invoice_date,part_number,quantity,taxable_amount,IRN No',`INV001,2026-10-26,PART001,200,32920.00,${irn}`,`INV001,2026-10-26,PART002,2.5,12.50,${irn}`]);
+  assert.equal(store.db.prepare('SELECT irn FROM invoices WHERE id=?').get(row.id).irn,irn);
+  store.save(meta('original'),{...doc,irn:null},{reprocess:true});assert.equal(store.db.prepare('SELECT irn FROM invoices WHERE id=?').get(row.id).irn,irn);
+});
+test('failure report includes validation issues and downloads without invoice rows, and excludes successful records',t=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'invoice-csv-test-'));const store=openStore(dir);
+  t.after(()=>{store.close();assert.equal(path.dirname(dir),path.resolve(os.tmpdir()));assert.ok(path.basename(dir).startsWith('invoice-csv-test-'));fs.rmSync(dir,{recursive:true,force:true});});
+  const review=processText('Tax Invoice\nInvoice No: REVIEW001');
+  store.save({gmail_id:'review',attachment_key:'a',filename:'needs-review.pdf'},review);
+  store.save({gmail_id:'ok',attachment_key:'a',filename:'passed.pdf'},{...review,invoiceNumber:'OK002',validation:{status:'VALIDATED',issues:[],checks:[]}});
+  store.markAttachment({gmail_id:'download',attachment_key:'a',filename:'download-failed.pdf'},'failed','Download interrupted');
+  store.exportAll();
+  const report=fs.readFileSync(path.join(dir,'failure-report.csv'),'utf8');
+  assert.match(report,/needs-review.pdf,REVIEW001,NEEDS_REVIEW/);assert.match(report,/invoiceDate: Missing or invalid calendar date/);
+  assert.match(report,/download-failed.pdf,,FAILED,Download interrupted/);assert.doesNotMatch(report,/passed.pdf/);
+});

@@ -2,12 +2,17 @@
 const fs = require('fs');
 const path = require('path');
 const { gmail, root } = require('./common');
-const { loadConfig } = require('./config');
+const { loadConfig, validateConfig } = require('./config');
 const { openStore } = require('./storage/store');
-const { runOnce, acquireRunLock } = require('./services/runOnceService');
+const { runOnce, acquireRunLock, ensureCheckpoint } = require('./services/runOnceService');
+const { chooseResultMode } = require('./services/resultModeService');
+const { clearPreviousResults } = require('./services/freshResultsService');
+const { chooseInvoiceAction, outputRunInvoices } = require('./services/invoiceOutputService');
 
 async function start() {
   const config = loadConfig(root);
+  const mode = await chooseResultMode(process.argv.slice(2));
+  if (mode === 'cancel') { console.log('Cancelled. Previous results were kept.'); return; }
   const dataDir = path.join(root,'data');
   const unlock = acquireRunLock(dataDir);
   let store;
@@ -27,7 +32,20 @@ async function start() {
       } finally { db.close(); }
     }
     store = openStore(dataDir);
-    return await runOnce({api:gmail(),store,dataDir,config,baseQuery:process.env.GMAIL_QUERY || 'in:inbox has:attachment filename:pdf',pageSize:process.env.PAGE_SIZE});
+    const api = gmail();
+    const baseQuery = process.env.GMAIL_QUERY || 'in:inbox has:attachment filename:pdf';
+    if (mode === 'fresh') {
+      // Establish an upgrade's initial boundary before removing the records used to derive it.
+      ensureCheckpoint(store,validateConfig(config),baseQuery,Math.floor(Date.now()/1000));
+      await clearPreviousResults(store,dataDir);
+    }
+    const summary=await runOnce({api,store,dataDir,config,baseQuery,pageSize:process.env.PAGE_SIZE});
+    if (summary.invoiceIds.length) {
+      const action=await chooseInvoiceAction(summary.invoiceIds.length,{interactive:process.stdin.isTTY || process.argv.includes('--choose')});
+      try { await outputRunInvoices(store,dataDir,summary,action); }
+      catch (e) { console.error('Email processing completed. Save/print error:',e.message);console.error('Retry the last batch with npm run originals -- --save or --print.');process.exitCode=1; }
+    } else console.log('No new unique invoices to save or print.');
+    return summary;
   } finally { if (store) store.close(); unlock(); }
 }
 if (require.main === module) start().catch(e=>{ console.error(e.message); process.exitCode=1; });

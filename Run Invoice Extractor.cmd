@@ -2,7 +2,7 @@
 setlocal
 cd /d "%~dp0"
 title Gmail Invoice Extractor
-echo Processing new invoices from configured senders...
+echo Gmail invoice reader - choose whether to keep previous results.
 echo.
 where node >nul 2>nul
 if errorlevel 1 (
@@ -10,7 +10,7 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-node src\index.js
+node src\index.js --choose
 set "RUN_RESULT=%ERRORLEVEL%"
 echo.
 if "%RUN_RESULT%"=="0" (
