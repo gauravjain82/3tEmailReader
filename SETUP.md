@@ -123,6 +123,7 @@ Open `data/invoices.csv` in Excel. It contains `invoice_number`, `invoice_date`,
 | Google authorization fails | Check the Desktop client, enabled Gmail API and test-user configuration; run `npm run auth` again. Port 3000 must be available for the local OAuth callback. |
 | SumatraPDF not detected | Use its standard installer, or set `SUMATRA_PDF` to the full executable path in `.env`. |
 | Signature verifier not found | Run Setup Signature Verification.cmd. For a custom environment, set `SIGNATURE_PYTHON` to its Python executable in `.env`. |
+| PyYAML build/config error | Updated setup upgrades pip, repairs PyYAML using its pinned 6.0.3 wheel, and requires prebuilt wheels for signature dependencies. Use standard 64-bit Python 3.12. Check the displayed **Verifier Python** version: an existing `.signature-venv` can still use an older/different interpreter after system Python changes. If pip says no matching distribution, capture the complete error and check Python architecture and package-index access; source compilation is not attempted. |
 | `SIGNATURE_UNKNOWN` or `SIGNATURE_UNSIGNED` | Read `signature-report.csv` and the verification details. IT may need to supply a trusted root or resolve revocation access; unsupported signature formats require manual review. |
 | CSV locked / `EBUSY` / `EPERM` | Close Excel or the application holding the file and retry. |
 | No emails/invoices found | Confirm the connected mailbox, allowed sender addresses and saved time window. Changing senders gives that sender configuration a separate checkpoint. |

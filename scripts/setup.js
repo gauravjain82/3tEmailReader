@@ -89,7 +89,16 @@ function setupSignatures(projectRoot=root) {
   if(!python.ok || !supportedPython(python.text))throw Error('Install Python 3.10+ (recommended 3.12), reopen this window, and rerun setup. See SETUP.md.');
   const executable=path.join(projectRoot,'.signature-venv','Scripts','python.exe');
   if(!fs.existsSync(executable))execute('python',['-m','venv',path.join(projectRoot,'.signature-venv')],projectRoot);
-  execute(executable,['-m','pip','install','-r',path.join(projectRoot,'requirements-signatures.txt')],projectRoot);
+  execute(executable,['-c',"import sys,struct; print('Verifier Python:',sys.version.split()[0],str(struct.calcsize('P')*8)+'-bit')"],projectRoot);
+  execute(executable,['-m','pip','install','--upgrade','pip'],projectRoot);
+  try {
+    // Repair incomplete/source-built PyYAML installs and avoid local C/Cython/Rust builds.
+    execute(executable,['-m','pip','install','--only-binary=:all:','--force-reinstall','PyYAML==6.0.3'],projectRoot);
+    execute(executable,['-m','pip','install','--only-binary=:all:','-r',path.join(projectRoot,'requirements-signatures.txt')],projectRoot);
+  } catch {
+    throw Error('Prebuilt signature packages could not be installed. Use standard 64-bit Python 3.12 and a package index that provides wheels. Check the displayed Verifier Python version, which may differ from system Python. See SETUP.md; do not install Cython/build tools just to bypass this error.');
+  }
+  execute(executable,['-c',"import yaml; assert yaml.__version__=='6.0.3'; print('PyYAML wheel import succeeded.')"],projectRoot);
   execute(executable,['-c',"from importlib.metadata import version; assert version('pyHanko')=='0.33.0'; print('Signature verifier is installed.')"],projectRoot);
   fs.mkdirSync(path.join(projectRoot,'certificates','trusted-roots'),{recursive:true});
 }
