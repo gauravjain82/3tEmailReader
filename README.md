@@ -2,11 +2,15 @@
 
 Runs once when you double-click `Run Invoice Extractor.cmd`: reads new Gmail PDF attachments from configured senders, extracts invoices, and writes JSON, CSV and SQLite. It exits after the batch; there is no background polling. No Gmail password required.
 
+**New PC:** follow [SETUP.md](SETUP.md), then double-click **Setup.cmd** for guided installation/configuration and machine checks. Existing settings and invoice data are retained. To check readiness without installing anything, run `npm run setup:check`.
+
 ## Prerequisites
-- Node.js 20 or 22 (recommended: Node.js 22 LTS) and npm
+- Node.js 22.x or 24.x and npm. SQLite is pinned to `better-sqlite3` 12.11.1, which supports both versions. Node 24 does not require downgrading for this project.
 - A Google Cloud project with **Gmail API enabled**
 - An OAuth consent screen configured, with your Gmail account added as a test user if the app is in testing mode
 - An **OAuth client ID** of type **Desktop app** (not service account)
+
+If an older checkout reports `node-gyp` / `find VS` while installing on Node 24, its `better-sqlite3` 11.x dependency lacks a matching prebuilt binary. Update with `npm install better-sqlite3@12.11.1 --save-exact`, or use the updated project lockfile with `npm ci`. A clean Windows x64 installation and all automated tests were verified on Node 24.22.1 as well as Node 22.16.0. Visual Studio Build Tools are needed only if a suitable prebuilt binary cannot be downloaded and npm must compile from source; VS Code does not supply that compiler.
 
 ## Setup (PowerShell)
 1. In Google Cloud Console: APIs & Services > Library > enable Gmail API.

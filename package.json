@@ -4,21 +4,23 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
+    "setup": "node scripts/setup.js",
+    "setup:check": "node scripts/setup.js --check",
     "auth": "node src/auth.js",
     "start": "node src/index.js",
     "originals": "node src/services/invoiceOutputService.js",
     "reprocess": "node src/services/reprocessingService.js",
     "verify:local": "node scripts/verify-local.js",
-    "test": "node --test"
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
-    "better-sqlite3": "^11.8.1",
+    "better-sqlite3": "12.11.1",
     "dotenv": "^16.4.7",
     "googleapis": "^144.0.0",
     "pdf-lib": "^1.17.1",
     "pdf-parse": "2.4.5"
   },
   "engines": {
-    "node": ">=20"
+    "node": "22.x || 24.x"
   }
 }
