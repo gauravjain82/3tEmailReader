@@ -25,7 +25,7 @@ function settings(projectRoot,env) {
   const result={...env};
   const file=path.join(projectRoot,'.env');
   if(fs.existsSync(file))for(const line of fs.readFileSync(file,'utf8').split(/\r?\n/)) {
-    const m=line.match(/^\s*(SUMATRA_PDF|SIGNATURE_PYTHON|SIGNATURE_TRUST_DIR|SIGNATURE_ALLOW_LEGACY_SHA1)\s*=\s*(.*?)\s*$/);
+    const m=line.match(/^\s*(SUMATRA_PDF|SIGNATURE_PYTHON|SIGNATURE_TRUST_DIR|SIGNATURE_ALLOW_LEGACY_SHA1|PRINT_ENGINE|ADOBE_READER)\s*=\s*(.*?)\s*$/);
     if(m && !result[m[1]])result[m[1]]=m[2].replace(/^(['"])(.*)\1$/,'$2');
   }
   return result;
@@ -75,6 +75,14 @@ function collectStatus(projectRoot=root,{run=probe,env=process.env,version=proce
   const pythonVersionsMatch=supportedRuntime(signaturePython)&&supportedRuntime(handwritingPython)&&signaturePython.version.join('.')===handwritingPython.version.join('.');
   const candidates=[configured.SUMATRA_PDF,configured.LOCALAPPDATA && path.join(configured.LOCALAPPDATA,'SumatraPDF','SumatraPDF.exe'),configured.ProgramFiles && path.join(configured.ProgramFiles,'SumatraPDF','SumatraPDF.exe'),configured['ProgramFiles(x86)'] && path.join(configured['ProgramFiles(x86)'],'SumatraPDF','SumatraPDF.exe')].filter(Boolean);
   const sumatra=candidates.some(f=>path.isAbsolute(f) && /\.exe$/i.test(f) && fs.existsSync(f));
+  const printEngine=configured.PRINT_ENGINE||'sumatra';
+  let adobe={ready:false};
+  if(printEngine==='adobe'&&platform==='win32') {
+    const args=['-NoProfile','-STA','-ExecutionPolicy','Bypass','-File',path.join(projectRoot,'scripts','adobe-print.ps1'),'-Check'];
+    if(configured.ADOBE_READER)args.push('-AdobeExe',configured.ADOBE_READER);
+    const result=run('powershell.exe',args,projectRoot);
+    if(result.ok)try{adobe=JSON.parse(result.text.replace(/^\uFEFF/,''));}catch{}
+  }
   let printer={name:'Not checked',valid:false,physical:false};
   if(platform==='win32') {
     const result=run('powershell.exe',['-NoProfile','-Command',"Add-Type -AssemblyName System.Drawing; $invoiceSetupPrinter=New-Object System.Drawing.Printing.PrinterSettings; @{name=$invoiceSetupPrinter.PrinterName;valid=$invoiceSetupPrinter.IsValid}|ConvertTo-Json -Compress"],projectRoot);
@@ -86,14 +94,18 @@ function collectStatus(projectRoot=root,{run=probe,env=process.env,version=proce
   status.certificates=certificateCheck.ready;
   status.legacyAdapter=legacyAdapter;
   status.legacySha1Enabled=configured.SIGNATURE_ALLOW_LEGACY_SHA1==='true';
-  status.printingPrerequisitesReady=status.extractionReady && status.signatureVerifier && status.certificates && status.legacyAdapter && status.sumatra && status.printer.physical;
+  status.printEngine=printEngine;
+  status.adobe=adobe;
+  status.printingPrerequisitesReady=status.extractionReady && status.signatureVerifier && status.certificates && status.legacyAdapter && (printEngine==='adobe'?adobe.ready===true:printEngine==='sumatra'&&status.sumatra) && status.printer.physical;
   status.localRejectionReady=status.node&&status.rejectionDependencies;
   status.localHandwritingReady=status.localRejectionReady&&status.handwritingDependencies&&status.handwritingModel&&(!signaturePython||status.pythonVersionsMatch);
   return status;
 }
 function showStatus(status) {
   console.log('\nMachine setup checks:');
-  for(const [key,label] of Object.entries({node:'Node.js 22/24',dependencies:'Node dependencies and SQLite binary',senders:'Configured sender addresses',credentials:'Gmail OAuth client file',gmailToken:'Gmail connection token',python:'Python 3.12, 64-bit',signatureVerifier:'Signature verifier',sumatra:'SumatraPDF',rejectionDependencies:'Local rejection parser / Windows-Tesseract OCR packages',handwritingDependencies:'Local handwriting Python packages (optional for Gmail)',handwritingModel:'Local TrOCR model files (optional for Gmail)',pythonVersionsMatch:'Signature and handwriting Python versions match'}))console.log(`  ${status[key]?'OK':'ACTION NEEDED'}  ${label}`);
+  for(const [key,label] of Object.entries({node:'Node.js 22/24',dependencies:'Node dependencies and SQLite binary',senders:'Configured sender addresses',credentials:'Gmail OAuth client file',gmailToken:'Gmail connection token',python:'Python 3.12, 64-bit',signatureVerifier:'Signature verifier',rejectionDependencies:'Local rejection parser / Windows-Tesseract OCR packages',handwritingDependencies:'Local handwriting Python packages (optional for Gmail)',handwritingModel:'Local TrOCR model files (optional for Gmail)',pythonVersionsMatch:'Signature and handwriting Python versions match'}))console.log(`  ${status[key]?'OK':'ACTION NEEDED'}  ${label}`);
+  const engineReady=status.printEngine==='adobe'?status.adobe.ready:status.printEngine==='sumatra'&&status.sumatra;
+  console.log(`  ${engineReady?'OK':'ACTION NEEDED'}  Print engine: ${status.printEngine==='adobe'?'Adobe Reader (run Test Adobe Printing.cmd on this PC)':status.printEngine}`);
   console.log('  Signature Python:',status.signaturePythonVersion,'| Handwriting Python:',status.handwritingPythonVersion);
   console.log(`  ${status.certificates?'OK':'ACTION NEEDED'}  Bundled CA fingerprints, validity and chains (${status.certificateCheck.count}/7)`);
   for(const issue of status.certificateCheck.issues)console.log('    '+issue);
@@ -185,7 +197,8 @@ async function main(args=process.argv.slice(2)) {
       const connect=(await prompt.question('Connect Gmail on this PC now? [y/N]: ')).trim().toLowerCase();
       if(['y','yes'].includes(connect))execute(process.execPath,[npm,'run','auth']);
     }
-    console.log('\nStep 6/7 - Printing. Install SumatraPDF and select your attached printer as Windows default.');
+    console.log('\nStep 6/7 - Printing. Select your attached printer as Windows default.');
+    console.log('For Adobe Reader and its validated signature appearance, run Setup Adobe Printing.cmd, then Test Adobe Printing.cmd.');
     console.log('SumatraPDF: https://www.sumatrapdfreader.org/download-free-pdf-viewer');
     console.log('A virtual PDF printer is not a physical print destination. No test page is sent by setup.');
     console.log('\nStep 7/7 - Final machine checks.');showStatus(collectStatus());

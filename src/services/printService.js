@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const { promisify } = require('util');
 const execute = promisify(require('child_process').execFile);
 const { verifyPdfSignature, recordSignatureCheck } = require('./signatureVerificationService');
+const {submitAdobe}=require('./adobePrintService');
 
 function findSumatra(env=process.env) {
   const candidates=[env.SUMATRA_PDF,
@@ -14,9 +15,10 @@ function findSumatra(env=process.env) {
   if (!executable) throw Error('Install SumatraPDF on this PC, or set SUMATRA_PDF in .env to its full .exe path. Set the attached printer as the Windows default printer.');
   return executable;
 }
-async function printOriginalInvoices(store,invoices,{platform=process.platform,findExecutable=findSumatra,run=execute,verifySignature=verifyPdfSignature}={}) {
+async function printOriginalInvoices(store,invoices,{platform=process.platform,findExecutable=findSumatra,run=execute,verifySignature=verifyPdfSignature,engine=process.env.PRINT_ENGINE||'sumatra',adobeSubmit=submitAdobe}={}) {
   if (platform!=='win32') throw Error('Direct printing is supported on Windows PCs.');
-  const result={submitted:[],skipped:[],uncertain:[],failed:[],blocked:[],signatureChecks:[]};
+  if(!['sumatra','adobe'].includes(engine))throw Error('PRINT_ENGINE must be sumatra or adobe');
+  const result={engine,submitted:[],skipped:[],uncertain:[],failed:[],blocked:[],signatureChecks:[]};
   const jobs=invoices.filter(item=>{
     const old=store.db.prepare('SELECT status FROM print_jobs WHERE invoice_number=?').get(item.invoiceNumber);
     if (old && old.status!=='failed') { result.skipped.push({invoiceNumber:item.invoiceNumber,reason:'Already submitted or needs printer-queue review'});return false; }
@@ -24,6 +26,7 @@ async function printOriginalInvoices(store,invoices,{platform=process.platform,f
   });
   if (!jobs.length) return result;
   let executable;
+  const adobeSessionFile=invoices[0]?.pdfPath+'.adobe-session-'+crypto.randomUUID()+'.json';
   for (const item of jobs) {
     try {
       const bytes=fs.readFileSync(item.pdfPath);
@@ -41,11 +44,11 @@ async function printOriginalInvoices(store,invoices,{platform=process.platform,f
     // Print a byte-identical copy of the verified complete original, not a rebuilt page PDF.
     const verifiedBytes=fs.readFileSync(sourcePdfPath);
     if (crypto.createHash('sha256').update(verifiedBytes).digest('hex')!==sourceHash) {result.failed.push({invoiceNumber:item.invoiceNumber,reason:'Original changed after signature verification'});continue;}
-    const printPath=item.pdfPath+'.verified.pdf';
+    const printPath=item.pdfPath+'.verified-'+crypto.randomUUID()+'.pdf';
     fs.writeFileSync(printPath,verifiedBytes);
     const page=item.pages?.[0] || 1;
     if (!Number.isSafeInteger(page) || page<1) {result.failed.push({invoiceNumber:item.invoiceNumber,reason:'Invalid original print page'});continue;}
-    executable ||= findExecutable();
+    if(engine==='sumatra')executable ||= findExecutable();
     const reserve=store.db.transaction(()=>{
       const old=store.db.prepare('SELECT status FROM print_jobs WHERE invoice_number=?').get(item.invoiceNumber);
       if (old && old.status!=='failed') return false;
@@ -58,11 +61,12 @@ async function printOriginalInvoices(store,invoices,{platform=process.platform,f
     try {
       // First original-recipient page only, one copy, from the verified original bytes.
       // Pass arguments directly without a shell, including paths with spaces.
-      await run(executable,['-print-to-default','-print-settings',`${page},1x,simplex,fit`,'-silent',path.resolve(printPath)],{windowsHide:true,timeout:120000,maxBuffer:16384});
+      if(engine==='adobe')await adobeSubmit({pdfPath:path.resolve(printPath),sha256:sourceHash,page,sessionFile:adobeSessionFile});
+      else await run(executable,['-print-to-default','-print-settings',`${page},1x,simplex,fit`,'-silent',path.resolve(printPath)],{windowsHide:true,timeout:120000,maxBuffer:16384});
       store.db.prepare("UPDATE print_jobs SET status='submitted',updated_at=?,error=NULL WHERE invoice_number=?").run(new Date().toISOString(),item.invoiceNumber);
       result.submitted.push(item.invoiceNumber);
     } catch (e) {
-      const status=['ENOENT','EACCES'].includes(e.code) ? 'failed' : 'uncertain';
+      const status=e.beforeSubmission===true||['ENOENT','EACCES'].includes(e.code) ? 'failed' : 'uncertain';
       const reason=`Printer submission ${status}: ${e.message}`;
       store.db.prepare('UPDATE print_jobs SET status=?,updated_at=?,error=? WHERE invoice_number=?').run(status,new Date().toISOString(),reason,item.invoiceNumber);
       result[status].push({invoiceNumber:item.invoiceNumber,reason});

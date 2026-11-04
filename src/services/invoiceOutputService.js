@@ -33,6 +33,7 @@ async function outputRunInvoices(store,dataDir,selection,action) {
   if(report.invoices.some(i=>i.signedOriginalPreserved))console.log('Signed attachments are kept intact. Printing uses only the first original-recipient page.');
   for (const item of report.skipped) console.error('Original skipped:',item.invoiceNumber,item.reason);
   if (['print','both'].includes(action) && report.invoices.length) {
+    if(process.env.PRINT_ENGINE==='adobe')console.log('Adobe desktop printing: close existing Reader windows first. Keep the desktop unlocked and avoid using the mouse/keyboard while the dialog is being set.');
     let printed;
     try { printed=await printOriginalInvoices(store,report.invoices); }
     finally { store.exportAll(); }

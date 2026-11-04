@@ -92,6 +92,30 @@ test('uncertain printer results are recorded and not automatically printed again
   assert.equal(store.db.prepare('SELECT status FROM print_jobs').get().status,'uncertain');
   assert.equal((await printOriginalInvoices(store,report.invoices,options)).skipped.length,1);assert.equal(calls,1);
 });
+
+test('Adobe prints the selected original page from unchanged complete bytes and preserves duplicate protection',async t=>{
+  const {store,dir,selection,bytes}=await seed(t);
+  const report=await saveOriginalInvoices(store,dir,selection);const calls=[];
+  const options={platform:'win32',engine:'adobe',verifySignature:mockSignatureValid,findExecutable:()=>assert.fail('No Sumatra fallback'),run:()=>assert.fail('No Sumatra printing'),adobeSubmit:async job=>{
+    calls.push(job);assert.equal(job.page,1);assert.deepEqual(fs.readFileSync(job.pdfPath),bytes);
+  }};
+  assert.equal((await printOriginalInvoices(store,report.invoices,options)).submitted.length,1);
+  assert.equal((await printOriginalInvoices(store,report.invoices,options)).skipped.length,1);
+  assert.equal(calls.length,1);
+});
+
+test('Adobe never prints a blocked signature and never retries an uncertain dialog submission',async t=>{
+  const {store,dir,selection}=await seed(t);const report=await saveOriginalInvoices(store,dir,selection);
+  const options={platform:'win32',engine:'adobe',verifySignature:async()=>({status:'UNKNOWN',reason:'Untrusted'}),adobeSubmit:()=>assert.fail('Blocked signatures cannot reach Reader')};
+  assert.equal((await printOriginalInvoices(store,report.invoices,options)).blocked.length,1);
+  options.verifySignature=mockSignatureValid;
+  options.adobeSubmit=async()=>{throw Object.assign(Error('Dialog unavailable'),{beforeSubmission:true});};
+  assert.equal((await printOriginalInvoices(store,report.invoices,options)).failed.length,1);
+  options.adobeSubmit=async()=>{throw Object.assign(Error('Timeout after invocation'),{beforeSubmission:false});};
+  assert.equal((await printOriginalInvoices(store,report.invoices,options)).uncertain.length,1);
+  options.adobeSubmit=()=>assert.fail('Uncertain submission must not retry');
+  assert.equal((await printOriginalInvoices(store,report.invoices,options)).skipped.length,1);
+});
 test('missing printing utility does not reserve jobs; altered prepared PDFs are not submitted',async t=>{
   const {store,dir,selection}=await seed(t);const report=await saveOriginalInvoices(store,dir,selection);
   assert.throws(()=>findSumatra({}),/Install SumatraPDF/);

@@ -106,6 +106,20 @@ Open the printed authorization URL in a browser on the same PC and sign in to th
 
 ## 7. Understand signature checks
 
+### Adobe Reader printing with its validated signature appearance
+
+The optional Adobe mode automates the **English free desktop Reader** Print dialog. It preserves the complete signed attachment, waits for Reader's **all signatures are valid** status, selects the current Windows default physical printer, sets the selected original-recipient page and one copy, then invokes Print. No paid Acrobat license is required. Other interface languages or inaccessible/unrecognized controls stop the job. There is no automatic fallback to Sumatra or an all-pages print command.
+
+1. Install/open Reader once and finish its first-launch prompts. In **Preferences > Signatures > Verification > More**, enable verification when opening a document. Confirm the same original invoice validates and prints with the desired appearance manually in Reader. The app's bundled CA files configure its own verifier; Reader must also establish trust using its own settings.
+2. Set your attached physical printer as Windows' default, then double-click **Setup Adobe Printing.cmd**. It detects Reader and sets `PRINT_ENGINE=adobe` in the local `.env`. A nonstandard installation can use `ADOBE_READER` with the full executable path. No printer name is configured in the app.
+3. Close Reader windows, then double-click **Test Adobe Printing.cmd** and paste the full path of one signed invoice. The test independently verifies the signature, opens a byte-identical local copy, confirms Reader validation and prepares one page/one copy in the Print dialog. It cancels the dialog without clicking Print or adding print-job tracking. Reports are under `data/verification/adobe-dry-run-<id>/`.
+4. After the dry run passes, run the extractor and choose **Print originals**. Keep the desktop unlocked and leave the mouse/keyboard alone while Reader is being controlled. Reader stays open after submission so closing it cannot interrupt spooling; close its windows before the next batch.
+5. Read `print-result.json` for submission results. An error before the Print invocation is retryable. A timeout/crash after invocation is **uncertain** and is not retried automatically; check the Windows queue and paper before any manual retry. Already submitted invoice numbers remain protected against duplicate printing across engines.
+
+This integration needs a dry run and a real printed-page check on each target Reader version; it has no physical-printer verification on the development PC, which has no Reader installation. The visible green tick is rendered by Reader, and the application does not draw one. Custom PDF page labels require manual page selection and are blocked in automation. Adobe's API documentation describes [Reader automation limits](https://opensource.adobe.com/dc-acrobat-sdk-docs/library/interapp/index.html); this mode uses the desktop dialog instead of the all-pages command-line print option.
+
+To return to the existing Sumatra path, set `PRINT_ENGINE=sumatra` in `.env`.
+
 Run `npm run setup:check` to repeat the read-only machine checks. They verify all seven bundled CA files against the approved SHA-256 manifest, CA status, current validity dates and issuing chains. They also check the configured trust folder, legacy adapter files and whether `SIGNATURE_ALLOW_LEGACY_SHA1=true` is enabled. Missing/changed/expired certificates show ACTION NEEDED. These offline checks do not establish an individual invoice's signature or revocation status; that happens automatically before printing with internet access.
 
 If signature setup used an incompatible Python version (for example 3.15), install **Python 3.12 64-bit**, close the extractor, and double-click **Repair Signature Setup.cmd**. It finds Python 3.12 in standard installation locations or via the Python launcher/PATH, backs up the existing `.signature-venv` under `data/backups/`, and recreates the verifier using Python 3.12. Internet access is required. If Python 3.12 is missing, it provides the official download link without moving the old environment. Invoice data and Gmail settings are retained. A custom `SIGNATURE_PYTHON` override must point to the repaired interpreter (or be removed to use the default).
@@ -139,6 +153,10 @@ Only signatures verified as `VALID` can be printed automatically. Invalid, unkno
 "Printing prerequisites ready" means the required software/default printer was detected. It does not confirm certificate validity or physical paper output.
 
 ## 8. Run invoices
+
+For a test that ignores the saved last-run time, double-click **Test Latest Emails.cmd** or run `npm run test:email`. It selects the latest email containing PDFs from **each exact sender configured in `config.json`**, including archived mail (Gmail normally excludes Spam/Trash). It does not use `firstRunAfter`, the normal Gmail query or the extraction checkpoint. It compares received times across the search results, so mailboxes with a large history can take longer to search.
+
+Every invocation creates a new folder under `data/test-runs/<timestamp>-<id>/`, containing `invoices.csv`, original-named PDFs, `failure-report.csv`, `attachment-signatures.csv` (every downloaded PDF, including duplicates), and `test-report.json`. It opens only its own test database. Normal results, invoice deduplication history, print history, `last-run-invoices.json` and the last-run checkpoint are retained unchanged. Nothing is printed and there is no clear-old-data prompt. A test can be repeated without marking those emails as processed for the normal extractor. Gmail sign-in/token refresh still works normally.
 
 Double-click **Run Invoice Extractor.cmd**:
 
