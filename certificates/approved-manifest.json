@@ -46,6 +46,24 @@
       "subject": "C=IN\nO=Verasys Technologies Pvt Ltd.\nOU=Certifying Authority\npostalCode=400025\nST=Maharashtra\nstreet=V.S. Marg\nhouseIdentifier=Office No. 21\\, 2nd Floor\\, Bhavna Building\nCN=Verasys Sub CA 2022",
       "validFrom": "Apr  6 12:30:00 2022 GMT",
       "validTo": "Mar  3 11:30:00 2032 GMT"
+    },
+    {
+      "file": "intermediates/SignXCA2022.cer",
+      "source": "https://signxca.com/repository/aia/SignXRootCA2022.cer",
+      "sha256": "a8d6363afeb8fe0fc8b627022954d5681872ea4d998e59b3d8395abcc3953452",
+      "role": "intermediate",
+      "subject": "C=IN\nO=FuturiQ Systems Private Limited\nOU=Certifying Authority\npostalCode=184101\nST=Jammu and Kashmir\nstreet=Arya Samaj Road\nhouseIdentifier=Ward No 5\nCN=SignX CA 2022",
+      "validFrom": "Aug 26 09:32:30 2022 GMT",
+      "validTo": "Aug 26 09:32:30 2032 GMT"
+    },
+    {
+      "file": "intermediates/SignXClass3Individual.cer",
+      "source": "https://signxca.com/repository/aia/SignXClass3Individual.cer",
+      "sha256": "d29b3587cd540c45fdb29b416c73eec4c7311f721d037f16013a96ce55d4f824",
+      "role": "intermediate",
+      "subject": "C=IN\nO=FuturiQ Systems Private Limited\nOU=Sub-CA\nCN=SignX sub-CA for Class 3 Individual 2022",
+      "validFrom": "Aug 30 05:07:08 2022 GMT",
+      "validTo": "Aug 26 08:32:30 2032 GMT"
     }
   ]
 }

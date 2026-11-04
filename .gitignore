@@ -17,6 +17,8 @@ config.json
 !/certificates/intermediates/PantaSignSubCADSC2022.cer
 !/certificates/intermediates/vsignca2022.cer
 !/certificates/intermediates/vsignsubca2022.cer
+!/certificates/intermediates/SignXCA2022.cer
+!/certificates/intermediates/SignXClass3Individual.cer
 __pycache__/
 /rejections/
 .handwriting-venv/

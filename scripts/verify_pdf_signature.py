@@ -40,6 +40,7 @@ def validate_file(filename, trust_dir, *, roots=None, crls=None, allow_fetching=
     from pyhanko.sign.validation.status import SignatureCoverageLevel
     from pyhanko_certvalidator import ValidationContext
     from pyhanko_certvalidator.policy_decl import DisallowWeakAlgorithmsPolicy
+    from legacy_pdf_signature import validate_legacy_pdf_signature, LegacyIntegrityError
 
     data = Path(filename).read_bytes()
     result = {'schemaVersion': 1, 'verifier': 'pyHanko-0.33.0',
@@ -63,6 +64,8 @@ def validate_file(filename, trust_dir, *, roots=None, crls=None, allow_fetching=
                                         revocation_mode='require', **policy_options)
             if signature.sig_object.get('/Type') == '/DocTimeStamp':
                 checked = validate_pdf_timestamp(signature, context)
+            elif signature.sig_object.get('/SubFilter') == '/adbe.pkcs7.sha1':
+                checked = validate_legacy_pdf_signature(signature, context, allow_legacy_sha1=allow_legacy_sha1)
             else:
                 checked = validate_pdf_signature(signature, context, ts_validation_context=context)
             intact, valid = bool(checked.intact), bool(checked.valid)
@@ -77,7 +80,10 @@ def validate_file(filename, trust_dir, *, roots=None, crls=None, allow_fetching=
                 'coverage': checked.coverage.name if checked.coverage else None,
                 'signer': checked.signing_cert.subject.human_friendly,
                 'certificateSha256': checked.signing_cert.sha256.hex(),
-                'details': checked.pretty_print_details()})
+                'details': checked.pretty_print_details(),
+                'format': str(signature.sig_object.get('/SubFilter', ''))})
+        except LegacyIntegrityError as error:
+            result['signatures'].append({'field': signature.field_name, 'status': 'INVALID', 'intact': False, 'details': str(error), 'format': '/adbe.pkcs7.sha1'})
         except Exception as error:
             result['signatures'].append({'field': signature.field_name, 'status': 'UNKNOWN', 'details': str(error), 'unsupportedFormat': 'not a recognized SubFilter' in str(error)})
     states = [s['status'] for s in result['signatures']]

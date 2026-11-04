@@ -110,7 +110,7 @@ If signature setup used an incompatible Python version (for example 3.15), insta
 
 Windows trusted roots are read automatically. If an issuer is not trusted, ask IT for its independently verified **public CA/root certificate** and place it in `certificates/trusted-roots/`. Do not add an invoice's signing certificate merely to make its warning disappear. Setup does not import certificates into Windows.
 
-The tested PantaSign/Verasys chains use **CCA India 2022** as root, with **PantaSign CA 2022 / PantaSign Sub CA for DSC 2022** or **Verasys CA 2022 / Verasys Sub CA 2022** as intermediates. Only the root goes in `trusted-roots`; the four intermediate files go in `certificates/intermediates`. The five approved public CA files are now included in Git in those folders and are loaded automatically on client PCs using the default trust directory. See `certificates/approved-manifest.json` for sources and fingerprints. Other local certificates and `.env` remain excluded; legacy SHA-1 compatibility still needs the local setting below. Signature, integrity, revocation and complete-file checks remain required.
+The tested PantaSign/Verasys/SignX chains use **CCA India 2022** as root, with **PantaSign CA 2022 / PantaSign Sub CA for DSC 2022** or **Verasys CA 2022 / Verasys Sub CA 2022** as intermediates. The FST chain uses **SignX CA 2022 / SignX sub-CA for Class 3 Individual 2022** under the same root. Only the root goes in `trusted-roots`; the six intermediate files go in `certificates/intermediates`. The seven approved public CA files are now included in Git in those folders and are loaded automatically on client PCs using the default trust directory. See `certificates/approved-manifest.json` for sources and fingerprints. Other local certificates and `.env` remain excluded; legacy SHA-1 compatibility still needs the local setting below. Signature, integrity, revocation and complete-file checks remain required.
 
 ### Existing SHA-1 invoices that Acrobat verifies
 
@@ -132,7 +132,7 @@ If the remaining error is **no path to a trusted root**, obtain the correct issu
 
 No sender signing key, password, `.pfx`, or `.p12` file is needed. A root certificate must represent a CA that your organisation trusts; a successful integrity check alone is not issuer authentication.
 
-Only signatures verified as `VALID` can be printed automatically. Invalid, unknown, unsigned, unsupported or unavailable checks are reported and blocked. The supplied MAHLE `/adbe.pkcs7.sha1` format is unsupported by the verifier and stays `UNKNOWN`; adding a trusted CA alone does not fix this format limitation. The visual question mark is not replaced with a green tick.
+Only signatures verified as `VALID` can be printed automatically. Invalid, unknown, unsigned, unsupported or unavailable checks are reported and blocked. The supplied MAHLE `/adbe.pkcs7.sha1` format is supported by the application adapter when `SIGNATURE_ALLOW_LEGACY_SHA1=true` is set in the local `.env`. The adapter checks the PDF-to-encapsulated-digest binding, CMS signature, trusted chain, required revocation evidence, modification policy and complete final coverage. No additional installation is needed beyond the existing signature setup; include both `scripts/verify_pdf_signature.py` and `scripts/legacy_pdf_signature.py` when updating a PC. Unknown legacy seed-value constraints remain blocked for review. The visual question mark is not replaced with a green tick.
 
 "Printing prerequisites ready" means the required software/default printer was detected. It does not confirm certificate validity or physical paper output.
 
@@ -182,4 +182,4 @@ Use **Test Handwriting OCR.cmd** to test just the two handwritten fields on one 
 | CSV locked / `EBUSY` / `EPERM` | Close Excel or the application holding the file and retry. |
 | No emails/invoices found | Confirm the connected mailbox, allowed sender addresses and saved time window. Changing senders gives that sender configuration a separate checkpoint. |
 
-Keep `credentials.json`, `token.json`, `.env`, `config.json`, additional local certificates, and `data/` private. The five approved public CA files are deliberately bundled for client deployment. Install updates into the existing local project and rerun setup as needed; retain the local settings and data. Git and VS Code are optional for day-to-day operation.
+Keep `credentials.json`, `token.json`, `.env`, `config.json`, additional local certificates, and `data/` private. The seven approved public CA files are deliberately bundled for client deployment. Install updates into the existing local project and rerun setup as needed; retain the local settings and data. Git and VS Code are optional for day-to-day operation.

@@ -75,5 +75,5 @@ test('real offline cryptographic tests validate, tamper, trust, revocation and u
   const python=process.env.SIGNATURE_PYTHON || path.resolve('.signature-venv',process.platform==='win32'?'Scripts/python.exe':'bin/python');
   if(!fs.existsSync(python))return t.skip('Run Setup Signature Verification.cmd to install the cryptographic test dependency');
   const result=spawnSync(python,['test/signature_crypto_checks.py'],{encoding:'utf8',windowsHide:true,timeout:60000});
-  assert.equal(result.status,0,result.stderr || result.error?.message);assert.match(result.stderr,/Ran 12 tests/);
+  assert.equal(result.status,0,result.stderr || result.error?.message);assert.match(result.stderr,/Ran 23 tests/);
 });

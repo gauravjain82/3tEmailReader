@@ -1,5 +1,6 @@
 """Offline cryptographic regression tests: test CAs are never installed or trusted globally."""
 import io
+import asyncio
 import sys
 import tempfile
 import unittest
@@ -18,6 +19,8 @@ from pyhanko.pdf_utils import generic
 from pyhanko.pdf_utils.writer import PdfFileWriter
 from pyhanko.pdf_utils.incremental_writer import IncrementalPdfFileWriter
 from pyhanko.sign import signers
+from pyhanko.sign.fields import append_signature_field, SigFieldSpec
+from pyhanko.sign.signers.pdf_byterange import SignatureObject
 from pyhanko_certvalidator.registry import SimpleCertificateStore
 
 
@@ -147,6 +150,87 @@ class VerificationTests(unittest.TestCase):
             .last_update(now-timedelta(hours=1)).next_update(now+timedelta(days=1))
             .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(self.root_key.public_key()),False)
             .add_revoked_certificate(revoked).sign(self.root_key,hashes.SHA256()))
+        self.assertNotEqual(self.check_pdf(allow_legacy_sha1=True)['status'],'VALID')
+
+    def sign_encapsulated(self, *, content=None, detached=False, corrupt_cms=False, cms_digest='sha256'):
+        writer=IncrementalPdfFileWriter(io.BytesIO(self.unsigned))
+        append_signature_field(writer,SigFieldSpec(sig_field_name='Signature1'))
+        placeholder=SignatureObject(bytes_reserved=16384)
+        placeholder[generic.pdf_name('/SubFilter')]=generic.pdf_name('/adbe.pkcs7.sha1')
+        field=writer.root['/AcroForm']['/Fields'][0].get_object()
+        field[generic.pdf_name('/V')]=writer.add_object(placeholder)
+        output=io.BytesIO()
+        fill=placeholder.fill(writer,'sha1',output=output)
+        prepared,_=next(fill)
+        message=asyncio.run(self.signer.async_sign_general_data(
+            prepared.document_digest if content is None else content,
+            digest_algorithm=cms_digest,detached=detached))
+        if corrupt_cms:
+            info=message['content']['signer_infos'][0]
+            raw=info['signature'].native
+            info['signature']=bytes([raw[0]^1])+raw[1:]
+        fill.send(message)
+        self.file.write_bytes(output.getvalue())
+
+    def test_encapsulated_sha1_requires_opt_in_and_validates_full_chain(self):
+        self.sign_encapsulated()
+        self.assertEqual(self.check_pdf()['status'],'UNKNOWN')
+        approved=self.check_pdf(allow_legacy_sha1=True)
+        self.assertEqual(approved['status'],'VALID',approved)
+        self.assertTrue(approved['signatures'][0]['trusted'])
+        self.assertEqual(approved['signatures'][0]['coverage'],'ENTIRE_FILE')
+
+    def test_encapsulated_sha1_with_sha1_cms_digest_is_supported(self):
+        self.sign_encapsulated(cms_digest='sha1')
+        self.assertEqual(self.check_pdf(allow_legacy_sha1=True)['status'],'VALID')
+
+    def test_encapsulated_valid_cms_for_wrong_document_digest_is_invalid(self):
+        self.sign_encapsulated(content=b'0'*20)
+        self.assertEqual(self.check_pdf(allow_legacy_sha1=True)['status'],'INVALID')
+
+    def test_encapsulated_tampered_pdf_is_invalid(self):
+        self.sign_encapsulated()
+        self.file.write_bytes(self.file.read_bytes().replace(b'original invoice content',b'modified invoice content'))
+        self.assertEqual(self.check_pdf(allow_legacy_sha1=True)['status'],'INVALID')
+
+    def test_encapsulated_broken_cms_signature_is_invalid(self):
+        self.sign_encapsulated(corrupt_cms=True)
+        self.assertEqual(self.check_pdf(allow_legacy_sha1=True)['status'],'INVALID')
+
+    def test_encapsulated_missing_or_wrong_length_content_is_invalid(self):
+        for content,detached in [(b'bad',False),(None,True)]:
+            self.sign_encapsulated(content=content,detached=detached)
+            self.assertEqual(self.check_pdf(allow_legacy_sha1=True)['status'],'INVALID')
+
+    def test_encapsulated_untrusted_signer_is_not_approved(self):
+        self.sign_encapsulated()
+        self.assertNotEqual(validate_file(self.file,self.folder.name,roots=[],allow_fetching=False,allow_legacy_sha1=True)['status'],'VALID')
+
+    def test_encapsulated_missing_revocation_is_not_approved(self):
+        self.sign_encapsulated()
+        self.assertNotEqual(validate_file(self.file,self.folder.name,roots=self.roots,allow_fetching=False,allow_legacy_sha1=True)['status'],'VALID')
+
+    def test_encapsulated_revoked_signer_is_not_approved(self):
+        self.sign_encapsulated()
+        now=datetime.now(timezone.utc)
+        revoked=x509.RevokedCertificateBuilder().serial_number(2).revocation_date(now-timedelta(hours=2)).build()
+        self.crl=(x509.CertificateRevocationListBuilder().issuer_name(self.root.subject)
+            .last_update(now-timedelta(hours=1)).next_update(now+timedelta(days=1))
+            .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(self.root_key.public_key()),False)
+            .add_revoked_certificate(revoked).sign(self.root_key,hashes.SHA256()))
+        self.assertNotEqual(self.check_pdf(allow_legacy_sha1=True)['status'],'VALID')
+
+    def test_encapsulated_appended_data_is_not_approved(self):
+        self.sign_encapsulated()
+        self.file.write_bytes(self.file.read_bytes()+b'\nUncovered data\n')
+        self.assertNotEqual(self.check_pdf(allow_legacy_sha1=True)['status'],'VALID')
+
+    def test_encapsulated_malformed_byte_range_is_not_approved(self):
+        import re
+        self.sign_encapsulated()
+        data=self.file.read_bytes()
+        data=re.sub(rb'/ByteRange\s*\[([^]]+)\]',lambda m:m.group(0).replace(b'[0 ',b'[-1 ',1),data,count=1)
+        self.file.write_bytes(data)
         self.assertNotEqual(self.check_pdf(allow_legacy_sha1=True)['status'],'VALID')
 
 
