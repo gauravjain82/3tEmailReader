@@ -62,6 +62,19 @@ test('source hash mismatch blocks saving or printing a changed download',async t
   const {store,dir,source,selection}=await seed(t);fs.writeFileSync(source,'modified');
   const report=await saveOriginalInvoices(store,dir,selection);assert.equal(report.invoices.length,0);assert.match(report.skipped[0].reason,/SHA-256/);
 });
+
+test('saved originals retain the attachment filename in separate invoice folders',async t=>{
+  const {store,dir,selection,meta}=await seed(t);
+  store.db.prepare('UPDATE invoices SET filename=?').run('Original Invoice (41).pdf');
+  const secondText=text('Original For Recipient').replace('ORIG001','ORIG002');
+  const pdf=await PDFDocument.create();pdf.addPage().drawText(secondText,{x:30,y:700,size:12,lineHeight:20});
+  const bytes=Buffer.from(await pdf.save());const source=path.join(dir,'second-source.pdf');fs.writeFileSync(source,bytes);
+  const second=store.save({...meta,gmail_id:'m2',filename:'Original Invoice (41).pdf',pdf_path:source,sha256:crypto.createHash('sha256').update(bytes).digest('hex')},processText(secondText));
+  const report=await saveOriginalInvoices(store,dir,{...selection,invoiceIds:[...selection.invoiceIds,second.id]});
+  assert.equal(report.invoices.length,2);
+  assert.equal(new Set(report.invoices.map(i=>i.pdfPath)).size,2);
+  for(const invoice of report.invoices)assert.equal(path.basename(invoice.pdfPath),'Original Invoice (41).pdf');
+});
 test('printing submits only page one through the default printer and skips repeat attempts, including after fresh reset',async t=>{
   const {store,dir,selection}=await seed(t,['Original For Recipient','Continuation page','Duplicate For Transporter']);const report=await saveOriginalInvoices(store,dir,selection);const calls=[];
   assert.equal((await PDFDocument.load(fs.readFileSync(report.invoices[0].pdfPath))).getPageCount(),2);

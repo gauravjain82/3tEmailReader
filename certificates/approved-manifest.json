@@ -1,0 +1,51 @@
+{
+  "reviewedOn": "2026-11-04",
+  "purpose": "Public CA bundle approved for application signature verification on client PCs",
+  "certificates": [
+    {
+      "file": "trusted-roots/CCAIndia2022.cer",
+      "source": "https://cca.gov.in/cca/sites/default/files/files/CCAIndia2022.cer",
+      "sha256": "9a3fd3176798e842ddcb12c262f11cfacca70a8b84c6ea6fda30842a95a94cd8",
+      "role": "trust-anchor",
+      "subject": "C=IN\nO=India PKI\nCN=CCA India 2022",
+      "validFrom": "Feb  2 12:04:37 2022 GMT",
+      "validTo": "Feb  2 12:04:37 2042 GMT"
+    },
+    {
+      "file": "intermediates/PantaSignCA2022.cer",
+      "source": "https://pantasign.com/repository/PantaSignCA2022.cer",
+      "sha256": "e1232769daba91eae7eaf2d0cf5b416e28b6c2f235bf76f4848e4ef5b1bd3048",
+      "role": "intermediate",
+      "subject": "C=IN\nO=Pantagon Sign Securities Pvt. Ltd.\nOU=Certifying Authority\npostalCode=250002\nST=Uttar Pradesh\nstreet=EK Road\\, Meerut\nhouseIdentifier=Office No. 107\\, 1st floor\\, Saraswati Plaza\nCN=PantaSign CA 2022",
+      "validFrom": "Mar 16 12:14:11 2022 GMT",
+      "validTo": "Mar 16 12:14:11 2032 GMT"
+    },
+    {
+      "file": "intermediates/PantaSignSubCADSC2022.cer",
+      "source": "https://pantasign.com/repository/PantaSignSubCADSC2022.cer",
+      "sha256": "d6ff38e645471bbd17b3e2e5a0deffe6fbfa5aab2b8f44dbd3bad833f411625a",
+      "role": "intermediate",
+      "subject": "C=IN\nO=Pantagon Sign Securities Pvt. Ltd.\nOU=Certifying Authority\npostalCode=250002\nST=Uttar Pradesh\nstreet=EK Road\\, Meerut\nhouseIdentifier=Office No. 107\\, 1st floor\\, Saraswati Plaza\nCN=PantaSign Sub CA for DSC 2022",
+      "validFrom": "Mar 29 09:41:18 2022 GMT",
+      "validTo": "Mar 16 12:14:11 2032 GMT"
+    },
+    {
+      "file": "intermediates/vsignca2022.cer",
+      "source": "https://www.vsign.in/repository/vsignca2022.cer",
+      "sha256": "bc2fd40ce175d9ab65deecbcc8bb2472dc727f89906ffffbebc1d916c9072f6d",
+      "role": "intermediate",
+      "subject": "C=IN\nO=Verasys Technologies Pvt Ltd.\nOU=Certifying Authority\npostalCode=400025\nST=Maharashtra\nstreet=V.S. Marg\nhouseIdentifier=Office No. 21\\, 2nd Floor\\, Bhavna Building\nCN=Verasys CA 2022",
+      "validFrom": "Mar  3 12:02:19 2022 GMT",
+      "validTo": "Mar  3 12:02:19 2032 GMT"
+    },
+    {
+      "file": "intermediates/vsignsubca2022.cer",
+      "source": "https://www.vsign.in/repository/vsignsubca2022.cer",
+      "sha256": "9bd77891b329e6ef5d07ce01f638745782ad6dce77aff0bdf3077f4517dcf968",
+      "role": "intermediate",
+      "subject": "C=IN\nO=Verasys Technologies Pvt Ltd.\nOU=Certifying Authority\npostalCode=400025\nST=Maharashtra\nstreet=V.S. Marg\nhouseIdentifier=Office No. 21\\, 2nd Floor\\, Bhavna Building\nCN=Verasys Sub CA 2022",
+      "validFrom": "Apr  6 12:30:00 2022 GMT",
+      "validTo": "Mar  3 11:30:00 2032 GMT"
+    }
+  ]
+}

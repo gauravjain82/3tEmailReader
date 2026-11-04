@@ -5,6 +5,7 @@ const { PDFParse } = require('pdf-parse');
 const { PDFDocument, PDFSignature } = require('pdf-lib');
 const { selectOriginalPages } = require('../pdf/originalPages');
 const { atomicWrite } = require('../storage/store');
+const { attachmentFilename, folderKey } = require('../storage/attachmentPaths');
 
 async function saveOriginalInvoices(store,dataDir,{runId,invoiceIds}) {
   if (!/^[a-zA-Z0-9-]+$/.test(runId || '') || !Array.isArray(invoiceIds)) throw Error('Invalid current-run invoice selection');
@@ -34,8 +35,8 @@ async function saveOriginalInvoices(store,dataDir,{runId,invoiceIds}) {
         copied.forEach(p=>target.addPage(p));
         original=Buffer.from(await target.save());
       }
-      const name=row.normalized_invoice_number.replace(/[^A-Z0-9._-]/g,'_')+'-'+sourceHash.slice(0,8)+'.pdf';
-      const pdfPath=path.join(outputDir,name);
+      const name=attachmentFilename(row.filename || row.normalized_invoice_number+'.pdf');
+      const pdfPath=path.join(outputDir,folderKey(row.normalized_invoice_number),name);
       atomicWrite(pdfPath,original);
       report.invoices.push({id:row.id,invoiceNumber:row.normalized_invoice_number,pdfPath,sha256:crypto.createHash('sha256').update(original).digest('hex'),sourcePdfPath:row.pdf_path,sourceSha256:sourceHash,pages:indices.map(n=>n+1),printPage:signed?indices[0]+1:1,signedOriginalPreserved:signed,validationStatus:row.validation_status});
     } catch (error) { report.skipped.push({id:row.id,invoiceNumber:row.normalized_invoice_number,reason:error.message}); }

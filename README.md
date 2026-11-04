@@ -85,7 +85,7 @@ Run **Setup.cmd** or **Setup Signature Verification.cmd** once on each PC with *
 
 When Print is selected, the app verifies the complete unchanged source attachment, its download SHA-256, embedded signature integrity, signer certificate chain, revocation information and final-document coverage. Only `VALID` results can reach the printer. Invalid, unknown, unsigned, unsupported, timed-out or unavailable checks block printing and are reported. No print job is reserved for a signature rejection, so it can be retried after the trust/setup issue is resolved. Invoice extraction's `VALIDATED` status is independent of signature validity.
 
-Windows roots trusted for general/document-signing use are read without changing the certificate store. If your issuer's root is not trusted, ask your IT team for its independently verified **CA/root certificate**, then place the public `.cer`, `.crt`, `.der` or `.pem` file in `certificates/trusted-roots/`. The app never automatically trusts certificates embedded in invoices or downloads roots to approve them. Revocation checks can contact the issuer's CRL/OCSP endpoints; unavailable evidence produces review rather than approval. Certificates and the local Python environment are excluded from Git. Optional `.env` overrides are `SIGNATURE_PYTHON` and `SIGNATURE_TRUST_DIR`.
+Windows roots trusted for general/document-signing use are read without changing the certificate store. If your issuer's root is not trusted, ask your IT team for its independently verified **CA/root certificate**, then place the public `.cer`, `.crt`, `.der` or `.pem` file in `certificates/trusted-roots/`. The app never automatically trusts certificates embedded in invoices or downloads roots to approve them. Revocation checks can contact the issuer's CRL/OCSP endpoints; unavailable evidence produces review rather than approval. The five approved public CA certificates are included in Git; their sources and fingerprints are listed in `certificates/approved-manifest.json`. Other local certificates and the Python environment are excluded. Optional `.env` overrides are `SIGNATURE_PYTHON` and `SIGNATURE_TRUST_DIR`.
 
 Results are saved in SQLite's `signature_checks`, `signature-report.csv`, and the batch's `print-result.json`. Non-valid signature checks also appear in `failure-report.csv`. Fresh mode archives the active signature report and preserves signature/print audit history. Extraction and saving still work if the verifier is unavailable; printing is blocked until verification passes.
 
@@ -121,7 +121,7 @@ PAGE_SIZE=50
 Every result page is processed. `POLL_SECONDS` and `MAX_MESSAGES_PER_POLL` are no longer used. The date window uses epoch seconds to avoid Gmail's timezone interpretation of date-only search terms; see [Google's filtering guide](https://developers.google.com/workspace/gmail/api/guides/filtering).
 
 ## Output
-- `data/pdfs/`: original downloaded PDFs
+- `data/pdfs/<message-id>/<part-key>/<original-filename>`: original downloaded PDFs. Valid attachment filenames (including spaces and Unicode) are preserved; unsafe Windows characters are sanitized. Separate folders prevent same-named attachments from overwriting each other. Existing downloads remain at their saved paths. Saved originals also retain the attachment filename in a separate folder per invoice.
 - `data/json/`: one JSON document per attachment
 - `data/invoices.csv`: main export, excluding repeated invoice numbers
 - `data/duplicates.csv`: historical and newly detected duplicates with links to their original invoice records

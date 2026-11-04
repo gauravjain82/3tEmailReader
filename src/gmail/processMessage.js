@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { processPdf } = require('../services/invoiceProcessingService');
-const { atomicWrite } = require('../storage/store');
+const { attachmentPath, writeOriginal } = require('../storage/attachmentPaths');
 const { senderAddress } = require('../config');
 const decode = s => Buffer.from(s.replace(/-/g,'+').replace(/_/g,'/'),'base64');
 const safe = s => (s || 'attachment.pdf').replace(/[^a-zA-Z0-9._-]/g,'_').slice(0,100);
@@ -63,9 +63,9 @@ async function processMessage(api, id, store, dataDir, {allowedSenders,exportAft
       if (meta.sha256 && hash !== meta.sha256) throw Error('Local PDF SHA-256 differs from original download');
       meta.sha256 = hash;
       const base = `${safe(id)}-${index}-${hash.slice(0,12)}`;
-      meta.pdf_path ||= path.join(dataDir, 'pdfs', base + '-' + safe(name));
+      meta.pdf_path ||= attachmentPath(dataDir, id, key, name);
       meta.json_path = path.join(dataDir, 'json', base + '.json');
-      if (!fs.existsSync(meta.pdf_path)) atomicWrite(meta.pdf_path, bytes);
+      writeOriginal(meta.pdf_path, bytes);
       const result = await processPdf(bytes);
       const saved = store.save(meta,result);
       if (saved.is_duplicate) { summary.duplicates++; console.log('Duplicate invoice:',result.invoiceNumber,'original record:',saved.duplicate_of); }

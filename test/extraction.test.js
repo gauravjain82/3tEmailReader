@@ -142,6 +142,11 @@ test('changing Gmail attachment IDs do not create new records for a stable MIME 
   assert.equal(downloads,1); assert.equal(store.db.prepare('SELECT count(*) n FROM invoices').get().n,1);
   assert.equal(store.find('stable-message','part-2.1').status,'done');
   // Simulate the old downloader's changing key. The path still identifies the legacy MIME index.
+  const current=store.db.prepare('SELECT pdf_path FROM invoices').get().pdf_path;
+  assert.equal(path.basename(current),'same.pdf');
+  const legacyPath=path.join(dir,'pdfs','stable-message-1-legacy-same.pdf');
+  fs.copyFileSync(current,legacyPath);
+  store.db.prepare('UPDATE invoices SET pdf_path=?').run(legacyPath);
   store.db.prepare("UPDATE attachments SET attachment_key='legacy-key'").run();
   store.db.prepare("UPDATE invoices SET attachment_key='legacy-key'").run();
   await processMessage(api,'stable-message',store,dir);
