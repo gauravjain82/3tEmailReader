@@ -19,7 +19,7 @@ function findSumatra(env=process.env) {
 async function printOriginalInvoices(store,invoices,{platform=process.platform,findExecutable=findSumatra,run=execute,verifySignature=verifyPdfSignature,engine=process.env.PRINT_ENGINE||'sumatra',adobeSubmit=submitAdobe,workDir=path.join(path.dirname(store.db.name),'print-work')}={}) {
   if (platform!=='win32') throw Error('Direct printing is supported on Windows PCs.');
   if(!['sumatra','adobe'].includes(engine))throw Error('PRINT_ENGINE must be sumatra or adobe');
-  const result={engine,submitted:[],skipped:[],uncertain:[],failed:[],blocked:[],signatureChecks:[]};
+  const result={engine,submitted:[],skipped:[],uncertain:[],failed:[],blocked:[],signatureChecks:[],unattempted:[]};
   const jobs=invoices.filter(item=>{
     const old=store.db.prepare('SELECT status FROM print_jobs WHERE invoice_number=?').get(item.invoiceNumber);
     if (old && old.status!=='failed') { result.skipped.push({invoiceNumber:item.invoiceNumber,reason:'Already submitted or needs printer-queue review'});return false; }
@@ -29,7 +29,7 @@ async function printOriginalInvoices(store,invoices,{platform=process.platform,f
   let executable;
   fs.mkdirSync(workDir,{recursive:true});
   const adobeSessionFile=path.join(workDir,'adobe-session-'+crypto.randomUUID()+'.json');
-  for (const item of jobs) {
+  for (const [jobIndex,item] of jobs.entries()) {
     try {
       const bytes=fs.readFileSync(item.pdfPath);
       if (crypto.createHash('sha256').update(bytes).digest('hex')!==item.sha256) throw Error('Original-only PDF changed after preparation');
@@ -72,6 +72,10 @@ async function printOriginalInvoices(store,invoices,{platform=process.platform,f
       const reason=`Printer submission ${status}: ${e.message}`;
       store.db.prepare('UPDATE print_jobs SET status=?,updated_at=?,error=? WHERE invoice_number=?').run(status,new Date().toISOString(),reason,item.invoiceNumber);
       result[status].push({invoiceNumber:item.invoiceNumber,reason});
+      if(engine==='adobe') {
+        result.unattempted=jobs.slice(jobIndex+1).map(job=>({invoiceNumber:job.invoiceNumber,reason:'Adobe automation stopped after the previous failure; no submission attempted'}));
+        break;
+      }
     }
   }
   return result;

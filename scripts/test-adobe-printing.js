@@ -22,4 +22,4 @@ const {attachmentFilename}=require('../src/storage/attachmentPaths');
   fs.writeFileSync(path.join(dir,'adobe-dry-run.json'),JSON.stringify(report,null,2));
   console.log('PASS: Reader validation, Windows default printer, page 1 and one copy confirmed. No Print click was made.');
   console.log('Report:',dir);
-})().catch(error=>{console.error('Adobe test:',error.message);process.exitCode=1;});
+})().catch(error=>{console.error('Adobe test:',error.message);if(error.resultPath)console.error('Diagnostic result:',error.resultPath);process.exitCode=1;});

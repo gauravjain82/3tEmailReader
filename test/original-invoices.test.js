@@ -139,6 +139,17 @@ test('Adobe never prints a blocked signature and never retries an uncertain dial
   options.adobeSubmit=()=>assert.fail('Uncertain submission must not retry');
   assert.equal((await printOriginalInvoices(store,report.invoices,options)).skipped.length,1);
 });
+
+test('Adobe automation failure stops the batch before opening another invoice',async t=>{
+  const {store,dir,selection}=await seed(t);const report=await saveOriginalInvoices(store,dir,selection);
+  const invoices=[report.invoices[0],{...report.invoices[0],invoiceNumber:'OTHER002'}];let calls=0;
+  const printed=await printOriginalInvoices(store,invoices,{platform:'win32',engine:'adobe',verifySignature:mockSignatureValid,adobeSubmit:async()=>{
+    calls++;throw Object.assign(Error('Reader window unavailable'),{beforeSubmission:true});
+  }});
+  assert.equal(calls,1);assert.equal(printed.failed.length,1);
+  assert.deepEqual(printed.unattempted.map(i=>i.invoiceNumber),['OTHER002']);
+  assert.equal(store.db.prepare("SELECT count(*) n FROM print_jobs WHERE invoice_number='OTHER002'").get().n,0);
+});
 test('missing printing utility does not reserve jobs; altered prepared PDFs are not submitted',async t=>{
   const {store,dir,selection}=await seed(t);const report=await saveOriginalInvoices(store,dir,selection);
   assert.throws(()=>findSumatra({}),/Install SumatraPDF/);

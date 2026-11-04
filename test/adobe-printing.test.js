@@ -51,7 +51,44 @@ test('Adobe readiness only probes the helper without opening or printing a PDF',
 });
 test('Adobe PowerShell controller parses on Windows without executing print commands',t=>{
   if(process.platform!=='win32')return t.skip('Windows PowerShell parser check');
-  const file=path.resolve('scripts/adobe-print.ps1').replace(/'/g,"''");
-  const parsed=spawnSync('powershell.exe',['-NoProfile','-Command',`$adobeTokens=$null; $adobeErrors=$null; [System.Management.Automation.Language.Parser]::ParseFile('${file}',[ref]$adobeTokens,[ref]$adobeErrors) | Out-Null; if($adobeErrors.Count){$adobeErrors | ForEach-Object {Write-Output $_.Message}; exit 1}`],{encoding:'utf8',windowsHide:true,timeout:15000});
-  assert.equal(parsed.status,0,parsed.stdout+parsed.stderr);
+  for(const name of ['adobe-print.ps1','adobe-ui.ps1','adobe-cleanup.ps1']) {
+    const file=path.resolve('scripts',name).replace(/'/g,"''");
+    const parsed=spawnSync('powershell.exe',['-NoProfile','-Command',`$adobeTokens=$null; $adobeErrors=$null; [System.Management.Automation.Language.Parser]::ParseFile('${file}',[ref]$adobeTokens,[ref]$adobeErrors) | Out-Null; if($adobeErrors.Count){$adobeErrors | ForEach-Object {Write-Output $_.Message}; exit 1}`],{encoding:'utf8',windowsHide:true,timeout:15000});
+    assert.equal(parsed.status,0,parsed.stdout+parsed.stderr);
+  }
+});
+
+test('Adobe validation status normalization accepts Reader chrome text and rejects negative statements',t=>{
+  if(process.platform!=='win32')return t.skip('Windows PowerShell helper check');
+  const file=path.resolve('scripts/adobe-ui.ps1').replace(/'/g,"''");
+  const command=`. '${file}'; $cases=@('Signed and all signatures are valid.','Signature Panel: All signatures are valid. View details','Signed and all  signatures are valid.','Not all signatures are valid','All signatures are valid but attention is required','All signatures are valid: NOT VERIFIED','Signature validity unknown'); foreach($case in $cases){[int](Test-AdobeValidStatus $case)}`;
+  const parsed=spawnSync('powershell.exe',['-NoProfile','-Command',command],{encoding:'utf8',windowsHide:true,timeout:15000});
+  assert.equal(parsed.status,0,parsed.stderr);
+  assert.deepEqual(parsed.stdout.trim().split(/\r?\n/),['1','1','1','0','0','0','0']);
+});
+
+test('Adobe worker errors retain their stage and run cleanup only before a Print invocation',async t=>{
+  const {file,hash}=await fixture(t);let cleanupCalls=0;
+  const progress=[];
+  for(const invoked of [false,true]) {
+    let resultPath;
+    await assert.rejects(submitAdobe({pdfPath:file,sha256:hash,page:1},{env:{},onProgress:stage=>progress.push(stage),cleanup:async()=>{cleanupCalls++;},run:async(_command,args)=>{
+      const jobPath=args[args.indexOf('-JobPath')+1];resultPath=jobPath+'.result.json';
+      if(invoked)fs.writeFileSync(jobPath+'.state.json','{"phase":"invoking"}');
+      throw Object.assign(Error('Worker failed'),{stdout:JSON.stringify({stage:'Selecting printer',error:'Printer selector unavailable'})});
+    }}),error=>error.stage==='Selecting printer'&&error.beforeSubmission===!invoked);
+    assert.equal(JSON.parse(fs.readFileSync(resultPath)).status,invoked?'UNCERTAIN':'FAILED');
+  }
+  assert.equal(cleanupCalls,1);assert.equal(progress.length,2);
+});
+
+test('Adobe progress is displayed while the worker is still running',async t=>{
+  const {file,hash}=await fixture(t);const progress=[];
+  await submitAdobe({pdfPath:file,sha256:hash,page:1,dryRun:true},{env:{},onProgress:message=>progress.push(message),run:async(_command,args)=>{
+    const jobPath=args[args.indexOf('-JobPath')+1];
+    fs.writeFileSync(jobPath+'.progress.json',JSON.stringify({stage:'Waiting for Reader validation'}));
+    await new Promise(resolve=>setTimeout(resolve,700));
+    assert.ok(progress.includes('Waiting for Reader validation'));
+    return {stdout:JSON.stringify({readerValidated:true,prepared:true,submitted:false,page:1,copies:1,printer:'Physical printer'})};
+  }});
 });

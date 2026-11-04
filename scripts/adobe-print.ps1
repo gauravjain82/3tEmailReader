@@ -2,18 +2,54 @@ param([switch]$Check,[switch]$DryRun,[string]$JobPath,[string]$AdobeExe)
 $ErrorActionPreference='Stop'
 $submitted=$false
 $readerWindow=$null
+$ownedHandle=[IntPtr]::Zero
+$stage='Starting Adobe checks'
+$baselineHandles=@()
+$launched=$false
 $result=@{submitted=$false;dryRun=[bool]$DryRun}
+function Progress([string]$text) {
+    $script:stage=$text
+    if($JobPath){@{stage=$text;at=[DateTime]::UtcNow.ToString('o')} | ConvertTo-Json -Compress | Set-Content -LiteralPath ($JobPath+'.progress.json') -Encoding UTF8}
+}
+function TrackWindow($window) {
+    if($JobPath) {
+        @{handle=$window.handle;processId=$window.processId;startTicks=$window.startTicks;closeAllowed=($baselineHandles -notcontains $window.handle)} | ConvertTo-Json -Compress | Set-Content -LiteralPath ($JobPath+'.ownership.json') -Encoding UTF8
+    }
+}
 try {
     Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes,System.Windows.Forms,System.Drawing
     Add-Type @'
 using System;
 using System.Runtime.InteropServices;
+using System.Collections.Generic;
+using System.Text;
+public sealed class InvoiceAdobeNativeWindow {
+ public long Handle; public int ProcessId; public string Title;
+}
 public static class InvoiceAdobeWindow {
  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr handle);
  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr handle,uint msg,IntPtr w,IntPtr l);
+ private delegate bool EnumProc(IntPtr handle,IntPtr param);
+ [DllImport("user32.dll")] private static extern bool EnumWindows(EnumProc callback,IntPtr param);
+ [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr handle);
+ [DllImport("user32.dll",CharSet=CharSet.Unicode)] private static extern int GetWindowText(IntPtr handle,StringBuilder text,int length);
+ [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr handle,out uint processId);
+ public static InvoiceAdobeNativeWindow[] VisibleWindows() {
+  var result=new List<InvoiceAdobeNativeWindow>();
+  EnumWindows(delegate(IntPtr handle,IntPtr param) {
+   if(!IsWindowVisible(handle))return true;
+   uint pid;GetWindowThreadProcessId(handle,out pid);
+   var title=new StringBuilder(2048);GetWindowText(handle,title,title.Capacity);
+   result.Add(new InvoiceAdobeNativeWindow {Handle=handle.ToInt64(),ProcessId=(int)pid,Title=title.ToString()});
+   return true;
+  },IntPtr.Zero);
+  return result.ToArray();
+ }
 }
 '@
+    . (Join-Path $PSScriptRoot 'adobe-ui.ps1')
+    Progress 'Checking Reader and the Windows default printer'
     $candidates=@($AdobeExe,$env:ADOBE_READER)
     foreach($registryPath in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths','HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths')) {
         foreach($exe in @('Acrobat.exe','AcroRd32.exe')) {
@@ -37,17 +73,17 @@ public static class InvoiceAdobeWindow {
     if(!$job.pdfPath -or ![IO.Path]::IsPathRooted($job.pdfPath) -or $job.sha256 -notmatch '^[a-f0-9]{64}$' -or $job.page -isnot [int] -or $job.page -lt 1){throw 'Invalid Adobe print job'}
     if((Get-FileHash -LiteralPath $job.pdfPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $job.sha256){throw 'Verified original PDF changed before Adobe printing'}
     if((Get-Process -Id $PID).SessionId -eq 0 -or ![Environment]::UserInteractive){throw 'Adobe automation needs an unlocked interactive Windows desktop'}
-    $existing=@(Get-Process Acrobat,AcroRd32 -ErrorAction SilentlyContinue | Where-Object {$_.MainWindowHandle -ne 0})
+    $existing=@(Get-AdobeWindows)
+    $baselineHandles=@($existing | ForEach-Object {$_.handle})
     $session=$null
     if($job.sessionFile -and (Test-Path -LiteralPath $job.sessionFile)){$session=Get-Content -LiteralPath $job.sessionFile -Raw | ConvertFrom-Json}
     if($existing.Count) {
-        if($existing.Count -ne 1 -or !$session -or $existing[0].Id -ne $session.processId -or $existing[0].StartTime.Ticks.ToString() -ne $session.startTicks -or $existing[0].MainWindowHandle.ToInt64() -ne $session.handle -or !$existing[0].MainWindowTitle.Contains($session.filename)) {
+        if($existing.Count -ne 1 -or !$session -or $existing[0].processId -ne $session.processId -or $existing[0].startTicks -ne $session.startTicks -or $existing[0].handle -ne $session.handle -or !(Test-AdobeDocumentWindow $existing[0] $session.filename)) {
             throw 'Close existing Adobe Reader/Acrobat windows before this batch so automation can identify its own document.'
         }
     }
     function Elements($parent,$type) {
-        $condition=New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$type)
-        return @($parent.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition))
+        return @(Get-AdobeControls $parent | Where-Object {$_.Current.ControlType -eq $type})
     }
     function Named($parent,$type,$pattern) {
         return @(Elements $parent $type | Where-Object {$_.Current.Name -match $pattern -and $_.Current.IsEnabled})
@@ -77,28 +113,51 @@ public static class InvoiceAdobeWindow {
         return One $matches $description
     }
     # Open the complete verified attachment. It is never split or resaved.
+    Progress 'Opening the verified invoice in Reader'
     $arguments='/A "page='+$job.page+'" "'+$job.pdfPath+'"'
     # This mode explicitly automates the visible desktop dialog chosen by the user.
     Start-Process -FilePath $executable -ArgumentList $arguments -WindowStyle Normal | Out-Null
-    $deadline=[DateTime]::UtcNow.AddSeconds(45)
+    $launched=$true
+    Progress 'Waiting for the Reader document window (up to 30 seconds)'
+    $deadline=[DateTime]::UtcNow.AddSeconds(30)
     while([DateTime]::UtcNow -lt $deadline) {
-        $processes=@(Get-Process Acrobat,AcroRd32 -ErrorAction SilentlyContinue | Where-Object {$_.MainWindowHandle -ne 0 -and $_.MainWindowTitle.Contains([IO.Path]::GetFileName($job.pdfPath))})
-        if($processes.Count -eq 1){$readerWindow=[System.Windows.Automation.AutomationElement]::FromHandle($processes[0].MainWindowHandle);break}
+        $windows=@(Get-AdobeWindows)
+        $matching=@($windows | Where-Object {$_.title.IndexOf([IO.Path]::GetFileName($job.pdfPath),[StringComparison]::OrdinalIgnoreCase) -ge 0})
+        if($matching.Count -eq 1){$ownedHandle=[IntPtr]$matching[0].handle;TrackWindow $matching[0];$readerWindow=[System.Windows.Automation.AutomationElement]::FromHandle($ownedHandle);break}
+        $new=@($windows | Where-Object {$baselineHandles -notcontains $_.handle})
+        # On a fresh Reader launch, metadata may replace the filename in the title.
+        # A single newly opened Reader window is still ours; existing batch windows
+        # must positively identify the new filename before they can be reused.
+        if(!$existing.Count -and $new.Count -eq 1) {
+            $ownedHandle=[IntPtr]$new[0].handle
+            TrackWindow $new[0]
+            $candidate=[System.Windows.Automation.AutomationElement]::FromHandle($ownedHandle)
+            $fileTabs=@(Get-AdobeControls $candidate | Where-Object {$_.Current.Name.IndexOf([IO.Path]::GetFileName($job.pdfPath),[StringComparison]::OrdinalIgnoreCase) -ge 0})
+            if($fileTabs.Count){$readerWindow=$candidate;break}
+        }
+        if($existing.Count -eq 1 -and $session) {
+            $current=@($windows | Where-Object {$_.handle -eq $session.handle -and $_.processId -eq $session.processId -and $_.startTicks -eq $session.startTicks})
+            if($current.Count -eq 1 -and (Test-AdobeDocumentWindow $current[0] ([IO.Path]::GetFileName($job.pdfPath)))) {
+                $ownedHandle=[IntPtr]$current[0].handle;TrackWindow $current[0]
+                $readerWindow=[System.Windows.Automation.AutomationElement]::FromHandle($ownedHandle);break
+            }
+        }
         Start-Sleep -Milliseconds 300
     }
     if(!$readerWindow){throw 'Could not identify the opened invoice in Reader. Complete first-launch prompts, then retry.'}
     if($job.sessionFile) {
         $owner=Get-Process -Id $readerWindow.Current.ProcessId
-        @{processId=$owner.Id;startTicks=$owner.StartTime.Ticks.ToString();handle=$readerWindow.Current.NativeWindowHandle;filename=[IO.Path]::GetFileName($job.pdfPath)} | ConvertTo-Json -Compress | Set-Content -LiteralPath $job.sessionFile -Encoding UTF8
+        @{processId=$owner.Id;startTicks=$owner.StartTime.Ticks.ToString();handle=$ownedHandle.ToInt64();filename=[IO.Path]::GetFileName($job.pdfPath)} | ConvertTo-Json -Compress | Set-Content -LiteralPath $job.sessionFile -Encoding UTF8
     }
     # A positive Reader validation status is required as well as the application's
     # independent cryptographic verification. Never replace the appearance ourselves.
-    $deadline=[DateTime]::UtcNow.AddSeconds(75)
+    Progress 'Waiting for Reader to report all signatures valid (up to 35 seconds)'
+    $deadline=[DateTime]::UtcNow.AddSeconds(35)
     $validated=$false
     $positiveReads=0
     while([DateTime]::UtcNow -lt $deadline) {
-        $all=@($readerWindow.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition))
-        $positive=@($all | Where-Object {$_.Current.Name -match '^Signed and all signatures are valid[.!]?$|^All signatures are valid[.!]?$'})
+        $all=@(Get-AdobeControls $readerWindow)
+        $positive=@($all | Where-Object {!$_.Current.IsOffscreen -and $_.Current.IsEnabled -and $_.Current.ControlType -ne [System.Windows.Automation.ControlType]::Window -and $_.Current.ControlType -ne [System.Windows.Automation.ControlType]::Document -and $_.Current.ControlType -ne [System.Windows.Automation.ControlType]::TabItem -and (Test-AdobeValidStatus $_.Current.Name)})
         if($positive.Count){$positiveReads++}else{$positiveReads=0}
         if($positiveReads -ge 3){$validated=$true;break}
         $validate=Named $readerWindow ([System.Windows.Automation.ControlType]::Button) '^Validate All( Signatures)?$'
@@ -107,7 +166,8 @@ public static class InvoiceAdobeWindow {
     }
     if(!$validated){throw 'Reader did not expose an all-signatures-valid status. Enable verification when opening documents in Reader Preferences > Signatures > Verification, and resolve Reader trust/accessibility prompts. No print submitted.'}
     $result.readerValidated=$true
-    $handle=[IntPtr]$readerWindow.Current.NativeWindowHandle
+    Progress 'Opening the Print dialog'
+    $handle=$ownedHandle
     [InvoiceAdobeWindow]::SetForegroundWindow($handle) | Out-Null
     Start-Sleep -Milliseconds 300
     if([InvoiceAdobeWindow]::GetForegroundWindow() -ne $handle){throw 'Reader could not take focus. No print submitted.'}
@@ -122,6 +182,7 @@ public static class InvoiceAdobeWindow {
         Start-Sleep -Milliseconds 250
     }
     if(!$dialog){throw 'Cannot identify the Adobe Print dialog. English Reader UI is currently required.'}
+    Progress 'Selecting the default printer, one original page, one copy and Fit'
     function SelectedPrinter($combo) {
         $selection=$combo.GetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern).GetCurrentSelection()
         if($selection.Count -ne 1){throw 'Cannot confirm the selected Adobe printer'}
@@ -174,6 +235,7 @@ public static class InvoiceAdobeWindow {
     $result.page=$job.page;$result.copies=1;$result.scaling='fit'
     if($DryRun){$result.prepared=$true}
     else {
+        Progress 'Submitting the verified Adobe print request'
         # Persist before invocation: any timeout/crash from here is uncertain and
         # must never cause an automatic retry or fallback to another engine.
         @{phase='invoking';pdfPath=$job.pdfPath} | ConvertTo-Json -Compress | Set-Content -LiteralPath ($JobPath+'.state.json') -Encoding UTF8
@@ -190,13 +252,33 @@ public static class InvoiceAdobeWindow {
     }
 } catch {
     $result.error=$_.Exception.Message
+    $result.stage=$stage
     $result.uncertain=$submitted
+    if($JobPath) {
+        # Save the exact UI seen at failure before attempting cleanup. Do not dump
+        # rendered document text or the entire desktop's accessibility tree.
+        try {
+            $windows=@(Get-AdobeWindows)
+            $diagnosticRoot=$dialog
+            if(!$diagnosticRoot){$diagnosticRoot=$readerWindow}
+            if(!$diagnosticRoot -and $ownedHandle -ne [IntPtr]::Zero){$diagnosticRoot=[System.Windows.Automation.AutomationElement]::FromHandle($ownedHandle)}
+            Write-AdobeDiagnostic ($JobPath+'.diagnostic.json') $windows $diagnosticRoot $stage $result.error
+            $result.diagnosticPath=$JobPath+'.diagnostic.json'
+        }catch {}
+    }
 } finally {
     # Only close our own document window before submission/during a dry run.
     # Leave submitted jobs in Reader so closing cannot interrupt spooling.
-    if($readerWindow -and !$submitted) {
+    if(!$submitted -and $launched) {
+        Progress 'Closing Reader after a stopped or dry-run job'
         if($dialog){try {Invoke (One (Named $dialog ([System.Windows.Automation.ControlType]::Button) '^Cancel$') 'Cancel button')} catch {}}
-        [InvoiceAdobeWindow]::PostMessage([IntPtr]$readerWindow.Current.NativeWindowHandle,0x0010,[IntPtr]::Zero,[IntPtr]::Zero) | Out-Null
+        # Window-title detection can fail before a UIA root is available. Close
+        # only newly created Reader windows, never pre-existing user windows.
+        try {foreach($window in @(Get-AdobeWindows | Where-Object {$baselineHandles -notcontains $_.handle -and $_.handle -ne $ownedHandle.ToInt64()})) {
+            [InvoiceAdobeWindow]::PostMessage([IntPtr]$window.handle,0x0010,[IntPtr]::Zero,[IntPtr]::Zero) | Out-Null
+        }}catch {}
+        Start-Sleep -Milliseconds 200
+        if($ownedHandle -ne [IntPtr]::Zero -and $baselineHandles -notcontains $ownedHandle.ToInt64()){[InvoiceAdobeWindow]::PostMessage($ownedHandle,0x0010,[IntPtr]::Zero,[IntPtr]::Zero) | Out-Null}
     }
 }
 $result | ConvertTo-Json -Compress

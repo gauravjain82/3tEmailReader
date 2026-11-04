@@ -120,6 +120,7 @@ async function testLatestEmails({api,projectRoot,config,verifySignature=verifyPd
           atomicWrite(path.join(outputDir,'print-result.json'),JSON.stringify(report.printing,null,2));
           log('Adobe print submissions:',report.printing.submitted.length,'already printed:',report.printing.skipped.length,'signature blocked:',report.printing.blocked.length,'failed:',report.printing.failed.length,'uncertain:',report.printing.uncertain.length);
           for(const status of ['blocked','failed','uncertain'])for(const item of report.printing[status])log('Test print '+status+':',item.invoiceNumber,item.reason);
+          if(report.printing.unattempted?.length)log('Adobe automation stopped; remaining invoices were not opened or printed:',report.printing.unattempted.length);
         }finally{if(history)history.close();release();}
       }catch(error){report.printError=error.message;report.printed=null;log('Test print error:',error.message,'Check the test print report and Windows printer queue before retrying.');}
     }
