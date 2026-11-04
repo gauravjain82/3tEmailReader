@@ -5,11 +5,14 @@ const { PDFParse } = require('pdf-parse');
 const { PDFDocument, PDFSignature } = require('pdf-lib');
 const { selectOriginalPages } = require('../pdf/originalPages');
 const { atomicWrite } = require('../storage/store');
-const { attachmentFilename, folderKey } = require('../storage/attachmentPaths');
+const { attachmentFilename, writeNamedFile } = require('../storage/attachmentPaths');
 
-async function saveOriginalInvoices(store,dataDir,{runId,invoiceIds}) {
+async function saveOriginalInvoices(store,dataDir,{runId,invoiceIds,useDownloads=false}) {
   if (!/^[a-zA-Z0-9-]+$/.test(runId || '') || !Array.isArray(invoiceIds)) throw Error('Invalid current-run invoice selection');
-  const outputDir=path.resolve(dataDir,'original-invoices',runId);
+  const outputDir=useDownloads?path.resolve(dataDir,'pdfs'):path.resolve(dataDir,'original-invoices',runId);
+  const manifestPath=useDownloads?path.resolve(dataDir,'print-originals.json'):path.join(outputDir,'manifest.json');
+  let previous=[];
+  try{const saved=JSON.parse(fs.readFileSync(manifestPath,'utf8')).invoices;if(Array.isArray(saved))previous=saved;}catch{}
   const report={runId,outputDir,invoices:[],skipped:[]};
   const seen=new Set();
   for (const id of invoiceIds) {
@@ -29,19 +32,25 @@ async function saveOriginalInvoices(store,dataDir,{runId,invoiceIds}) {
       if (source.getPageCount()!==pages.length) throw Error('PDF page count could not be verified');
       const signed=source.getForm().getFields().some(field=>field instanceof PDFSignature) || /\/ByteRange\s*\[/.test(bytes.toString('latin1'));
       let original=bytes;
-      if (!signed && indices.length!==pages.length) {
+      if (!useDownloads && !signed && indices.length!==pages.length) {
         const target=await PDFDocument.create();
         const copied=await target.copyPages(source,indices);
         copied.forEach(p=>target.addPage(p));
         original=Buffer.from(await target.save());
       }
       const name=attachmentFilename(row.filename || row.normalized_invoice_number+'.pdf');
-      const pdfPath=path.join(outputDir,folderKey(row.normalized_invoice_number),name);
-      atomicWrite(pdfPath,original);
-      report.invoices.push({id:row.id,invoiceNumber:row.normalized_invoice_number,pdfPath,sha256:crypto.createHash('sha256').update(original).digest('hex'),sourcePdfPath:row.pdf_path,sourceSha256:sourceHash,pages:indices.map(n=>n+1),printPage:signed?indices[0]+1:1,signedOriginalPreserved:signed,validationStatus:row.validation_status});
+      let pdfPath;
+      const prior=previous.find(item=>item.id===row.id && item.sourceSha256===sourceHash && path.dirname(path.resolve(item.pdfPath))===outputDir && fs.existsSync(item.pdfPath));
+      if(useDownloads)pdfPath=row.pdf_path;
+      else if(prior) {
+        const existing=fs.readFileSync(prior.pdfPath);
+        if(crypto.createHash('sha256').update(existing).digest('hex')!==prior.sha256)throw Error('Previously saved original PDF changed');
+        pdfPath=prior.pdfPath;original=existing;
+      }else pdfPath=writeNamedFile(outputDir,name,original);
+      report.invoices.push({id:row.id,invoiceNumber:row.normalized_invoice_number,pdfPath,sha256:crypto.createHash('sha256').update(original).digest('hex'),sourcePdfPath:row.pdf_path,sourceSha256:sourceHash,pages:indices.map(n=>n+1),printPage:signed||useDownloads?indices[0]+1:1,signedOriginalPreserved:signed,validationStatus:row.validation_status});
     } catch (error) { report.skipped.push({id:row.id,invoiceNumber:row.normalized_invoice_number,reason:error.message}); }
   }
-  atomicWrite(path.join(outputDir,'manifest.json'),JSON.stringify(report,null,2));
+  atomicWrite(manifestPath,JSON.stringify(report,null,2));
   return report;
 }
 module.exports = { saveOriginalInvoices };

@@ -19,7 +19,22 @@ function folderKey(value) {
     : 'id-' + crypto.createHash('sha256').update(raw).digest('hex').slice(0, 24);
 }
 function attachmentPath(dataDir, messageId, partKey, filename) {
-  return path.resolve(dataDir, 'pdfs', folderKey(messageId), folderKey(partKey), attachmentFilename(filename));
+  return path.resolve(dataDir, 'pdfs', attachmentFilename(filename));
+}
+function writeNamedFile(folder, filename, bytes) {
+  const name=attachmentFilename(filename),ext=path.extname(name),stem=name.slice(0,name.length-ext.length);
+  fs.mkdirSync(folder,{recursive:true});
+  for(let number=1;number<=10000;number++) {
+    const suffix=number===1?'':` (${number})`;
+    const base=stem.slice(0,240-ext.length-suffix.length).replace(/[\uD800-\uDBFF]$/,'');
+    const file=path.resolve(folder,base+suffix+ext);
+    try {fs.writeFileSync(file,bytes,{flag:'wx'});return file;}
+    catch(error) {
+      if(error.code!=='EEXIST')throw error;
+      if(fs.readFileSync(file).equals(bytes))return file;
+    }
+  }
+  throw Error('Too many different files share this invoice filename');
 }
 function writeOriginal(file, bytes) {
   fs.mkdirSync(path.dirname(file), {recursive:true});
@@ -29,4 +44,4 @@ function writeOriginal(file, bytes) {
     if (!fs.readFileSync(file).equals(bytes)) throw Error('Existing PDF differs from attachment; refusing to overwrite it');
   }
 }
-module.exports = {attachmentFilename, folderKey, attachmentPath, writeOriginal};
+module.exports = {attachmentFilename, folderKey, attachmentPath, writeOriginal, writeNamedFile};

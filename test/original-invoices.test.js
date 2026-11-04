@@ -63,7 +63,7 @@ test('source hash mismatch blocks saving or printing a changed download',async t
   const report=await saveOriginalInvoices(store,dir,selection);assert.equal(report.invoices.length,0);assert.match(report.skipped[0].reason,/SHA-256/);
 });
 
-test('saved originals retain the attachment filename in separate invoice folders',async t=>{
+test('saved originals share one folder, retain original names and number filename collisions',async t=>{
   const {store,dir,selection,meta}=await seed(t);
   store.db.prepare('UPDATE invoices SET filename=?').run('Original Invoice (41).pdf');
   const secondText=text('Original For Recipient').replace('ORIG001','ORIG002');
@@ -73,7 +73,30 @@ test('saved originals retain the attachment filename in separate invoice folders
   const report=await saveOriginalInvoices(store,dir,{...selection,invoiceIds:[...selection.invoiceIds,second.id]});
   assert.equal(report.invoices.length,2);
   assert.equal(new Set(report.invoices.map(i=>i.pdfPath)).size,2);
-  for(const invoice of report.invoices)assert.equal(path.basename(invoice.pdfPath),'Original Invoice (41).pdf');
+  assert.equal(new Set(report.invoices.map(i=>path.dirname(i.pdfPath))).size,1);
+  assert.deepEqual(report.invoices.map(i=>path.basename(i.pdfPath)),['Original Invoice (41).pdf','Original Invoice (41) (2).pdf']);
+  const repeated=await saveOriginalInvoices(store,dir,{...selection,invoiceIds:[...selection.invoiceIds,second.id]});
+  assert.deepEqual(repeated.invoices.map(i=>i.pdfPath),report.invoices.map(i=>i.pdfPath));
+  assert.equal(fs.readdirSync(report.outputDir).filter(name=>/\.pdf$/i.test(name)).length,2);
+});
+
+test('test print preparation reuses complete downloads without creating another invoice folder',async t=>{
+  const {store,dir,selection,source,bytes}=await seed(t);
+  const report=await saveOriginalInvoices(store,dir,{...selection,useDownloads:true});
+  assert.equal(report.invoices.length,1);assert.equal(report.invoices[0].pdfPath,source);
+  assert.deepEqual(fs.readFileSync(source),bytes);assert.deepEqual(report.invoices[0].pages,[1]);
+  assert.equal(fs.existsSync(path.join(dir,'original-invoices')),false);
+});
+
+test('download-based test printing selects the recipient page when it is not PDF page one',async t=>{
+  const {store,dir,selection,bytes}=await seed(t,['Duplicate For Transporter','Original For Recipient','Triplicate For Supplier']);
+  const report=await saveOriginalInvoices(store,dir,{...selection,useDownloads:true});
+  assert.deepEqual(report.invoices[0].pages,[2]);assert.equal(report.invoices[0].printPage,2);
+  let page;
+  const printed=await printOriginalInvoices(store,report.invoices,{platform:'win32',engine:'adobe',verifySignature:mockSignatureValid,adobeSubmit:async job=>{
+    page=job.page;assert.deepEqual(fs.readFileSync(job.pdfPath),bytes);
+  }});
+  assert.equal(printed.submitted.length,1);assert.equal(page,2);
 });
 test('printing submits only page one through the default printer and skips repeat attempts, including after fresh reset',async t=>{
   const {store,dir,selection}=await seed(t,['Original For Recipient','Continuation page','Duplicate For Transporter']);const report=await saveOriginalInvoices(store,dir,selection);const calls=[];

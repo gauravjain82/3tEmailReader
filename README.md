@@ -123,7 +123,7 @@ PAGE_SIZE=50
 Every result page is processed. `POLL_SECONDS` and `MAX_MESSAGES_PER_POLL` are no longer used. The date window uses epoch seconds to avoid Gmail's timezone interpretation of date-only search terms; see [Google's filtering guide](https://developers.google.com/workspace/gmail/api/guides/filtering).
 
 ## Output
-- `data/pdfs/<message-id>/<part-key>/<original-filename>`: original downloaded PDFs. Valid attachment filenames (including spaces and Unicode) are preserved; unsafe Windows characters are sanitized. Separate folders prevent same-named attachments from overwriting each other. Existing downloads remain at their saved paths. Saved originals also retain the attachment filename in a separate folder per invoice.
+- `data/pdfs/`: all new original downloads share this single folder. Original attachment filenames are preserved, including spaces and Unicode; unsafe Windows characters are sanitized. Different PDFs with the same name receive ` (2)`, ` (3)`, etc. Byte-identical files with the same name reuse the existing file while retaining separate attachment provenance. Existing downloads remain at their saved paths. Saved originals likewise share one folder per run, with no per-invoice subfolders.
 - `data/json/`: one JSON document per attachment
 - `data/invoices.csv`: main export, excluding repeated invoice numbers
 - `data/duplicates.csv`: historical and newly detected duplicates with links to their original invoice records
@@ -189,7 +189,7 @@ Each invoice extraction attempt records its candidate and saved result in `extra
 
 ## Test latest configured emails
 
-To parse the latest PDF email from each configured sender without using/updating the last-run time, double-click **Test Latest Emails.cmd** or run `npm run test:email`. Test PDFs, invoice CSV, signature checks and failure reports go into a new `data/test-runs/` subfolder on each invocation. The main results, last batch and print history stay unchanged; tests do not print. Senders come only from `config.json`. See [SETUP.md](SETUP.md) for details.
+To parse the latest PDF email from each configured sender without using/updating the last-run time, double-click **Test Latest Emails.cmd** or run `npm run test:email`. Test PDFs, invoice CSV, signature checks and failure reports go into a new `data/test-runs/` subfolder on each invocation. Normal results, the last batch and normal print history stay unchanged. After parsing, choose whether to print through Adobe; use `npm run test:email -- --print` or **Test Latest Emails And Print.cmd** for direct printing, or `--no-print` for parsing only. Test printing uses the existing Adobe dialog automation for one original page and one copy, and a separate persistent test print history prevents repeat/uncertain submissions. Downloaded test PDFs all share that run's `pdfs/` folder. Senders come only from `config.json`. See [SETUP.md](SETUP.md) for details.
 
 ## Reprocess downloaded PDFs
 

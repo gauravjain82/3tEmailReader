@@ -43,6 +43,8 @@ test('isolated latest-email run preserves live files/checkpoint and checks dupli
   }});
   const first=await run();
   assert.equal(first.emails[0].status,'PROCESSED');assert.equal(first.attachments.length,2);assert.equal(checks,2);
+  assert.equal(fs.readdirSync(path.join(first.outputDir,'pdfs')).filter(name=>/\.pdf$/i.test(name)).length,1);
+  assert.equal(path.dirname(first.attachments[0].pdfPath),path.join(first.outputDir,'pdfs'));
   assert.equal(first.printed,false);assert.equal(first.checkpointChanged,false);
   assert.equal(fs.existsSync(path.join(first.outputDir,'invoices.csv')),true);
   assert.equal(fs.existsSync(path.join(first.outputDir,'failure-report.csv')),true);
@@ -72,4 +74,36 @@ test('latest email errors, missing senders and signature failures remain reviewa
 test('repeated Gmail pagination tokens stop the test instead of looping',async()=>{
   const api={users:{messages:{list:async()=>({data:{messages:[],nextPageToken:'repeat'}})}}};
   await assert.rejects(latestPdfEmail(api,'billing@company.test'),/repeated pagination/);
+});
+
+test('test print automates Adobe once per invoice, preserves live state and remembers previous test submissions',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'invoice-latest-print-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  fs.mkdirSync(path.join(root,'data'));const live=path.join(root,'data','invoices.db');fs.writeFileSync(live,'live state sentinel');
+  const bytes=await pdfBytes('TEST003');const msg=message('new','billing@company.test',500,bytes);
+  msg.payload.parts.push({...msg.payload.parts[0],partId:'2'});
+  const api={users:{messages:{list:async()=>({data:{messages:[{id:'new'}]}}),get:async()=>({data:msg})}}};
+  let submissions=0;
+  const options={api,projectRoot:root,config:{allowedSenders:['billing@company.test']},print:true,log:()=>{},verifySignature:async()=>({status:'VALID',reason:'Mocked test verification',signatures:[]}),printOptions:{platform:'win32',adobeSubmit:async job=>{
+    submissions++;assert.equal(job.page,1);assert.equal(path.basename(path.dirname(job.pdfPath)),'print-work');assert.deepEqual(fs.readFileSync(job.pdfPath),bytes);
+  },findExecutable:()=>assert.fail('Must use Adobe'),run:()=>assert.fail('Must not fall back to Sumatra')}};
+  const first=await testLatestEmails(options);
+  assert.equal(first.printed,true);assert.equal(first.printing.engine,'adobe');assert.equal(first.printing.submitted.length,1);
+  assert.equal(fs.existsSync(path.join(first.outputDir,'original-invoices')),false);
+  const second=await testLatestEmails(options);
+  assert.equal(second.printed,false);assert.equal(second.printing.skipped.length,1);assert.equal(submissions,1);
+  assert.equal(fs.readFileSync(live,'utf8'),'live state sentinel');
+  assert.equal(fs.existsSync(path.join(root,'data','last-run-invoices.json')),false);
+});
+
+test('test print choice is optional and unknown signatures cannot reach Adobe',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'invoice-latest-blocked-print-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const bytes=await pdfBytes('TEST004');const msg=message('new','billing@company.test',500,bytes);
+  const options={api:{users:{messages:{list:async()=>({data:{messages:[{id:'new'}]}}),get:async()=>({data:msg})}}},projectRoot:root,config:{allowedSenders:['billing@company.test']},log:()=>{},verifySignature:async()=>({status:'UNKNOWN',reason:'Untrusted issuer',signatures:[]}),printOptions:{platform:'win32',adobeSubmit:()=>assert.fail('Untrusted signatures cannot print')}};
+  const declined=await testLatestEmails({...options,choosePrint:async()=>false});
+  assert.equal(declined.printRequested,false);
+  assert.equal(fs.existsSync(path.join(root,'data','test-runs','print-history')),false);
+  const blocked=await testLatestEmails({...options,choosePrint:async count=>{assert.equal(count,1);return true;}});
+  assert.equal(blocked.printed,false);assert.equal(blocked.printing.blocked.length,1);
 });

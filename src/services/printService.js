@@ -5,6 +5,7 @@ const { promisify } = require('util');
 const execute = promisify(require('child_process').execFile);
 const { verifyPdfSignature, recordSignatureCheck } = require('./signatureVerificationService');
 const {submitAdobe}=require('./adobePrintService');
+const {folderKey}=require('../storage/attachmentPaths');
 
 function findSumatra(env=process.env) {
   const candidates=[env.SUMATRA_PDF,
@@ -15,7 +16,7 @@ function findSumatra(env=process.env) {
   if (!executable) throw Error('Install SumatraPDF on this PC, or set SUMATRA_PDF in .env to its full .exe path. Set the attached printer as the Windows default printer.');
   return executable;
 }
-async function printOriginalInvoices(store,invoices,{platform=process.platform,findExecutable=findSumatra,run=execute,verifySignature=verifyPdfSignature,engine=process.env.PRINT_ENGINE||'sumatra',adobeSubmit=submitAdobe}={}) {
+async function printOriginalInvoices(store,invoices,{platform=process.platform,findExecutable=findSumatra,run=execute,verifySignature=verifyPdfSignature,engine=process.env.PRINT_ENGINE||'sumatra',adobeSubmit=submitAdobe,workDir=path.join(path.dirname(store.db.name),'print-work')}={}) {
   if (platform!=='win32') throw Error('Direct printing is supported on Windows PCs.');
   if(!['sumatra','adobe'].includes(engine))throw Error('PRINT_ENGINE must be sumatra or adobe');
   const result={engine,submitted:[],skipped:[],uncertain:[],failed:[],blocked:[],signatureChecks:[]};
@@ -26,7 +27,8 @@ async function printOriginalInvoices(store,invoices,{platform=process.platform,f
   });
   if (!jobs.length) return result;
   let executable;
-  const adobeSessionFile=invoices[0]?.pdfPath+'.adobe-session-'+crypto.randomUUID()+'.json';
+  fs.mkdirSync(workDir,{recursive:true});
+  const adobeSessionFile=path.join(workDir,'adobe-session-'+crypto.randomUUID()+'.json');
   for (const item of jobs) {
     try {
       const bytes=fs.readFileSync(item.pdfPath);
@@ -44,7 +46,7 @@ async function printOriginalInvoices(store,invoices,{platform=process.platform,f
     // Print a byte-identical copy of the verified complete original, not a rebuilt page PDF.
     const verifiedBytes=fs.readFileSync(sourcePdfPath);
     if (crypto.createHash('sha256').update(verifiedBytes).digest('hex')!==sourceHash) {result.failed.push({invoiceNumber:item.invoiceNumber,reason:'Original changed after signature verification'});continue;}
-    const printPath=item.pdfPath+'.verified-'+crypto.randomUUID()+'.pdf';
+    const printPath=path.join(workDir,folderKey(item.invoiceNumber)+'-'+crypto.randomUUID()+'.pdf');
     fs.writeFileSync(printPath,verifiedBytes);
     const page=item.pages?.[0] || 1;
     if (!Number.isSafeInteger(page) || page<1) {result.failed.push({invoiceNumber:item.invoiceNumber,reason:'Invalid original print page'});continue;}

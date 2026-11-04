@@ -5,6 +5,9 @@ const {validateConfig,senderAddress}=require('../config');
 const {withRetry,processMessage}=require('../gmail/processMessage');
 const {openStore,atomicWrite}=require('../storage/store');
 const {verifyPdfSignature,recordSignatureCheck}=require('./signatureVerificationService');
+const {saveOriginalInvoices}=require('./originalInvoiceService');
+const {printOriginalInvoices}=require('./printService');
+const {acquireRunLock}=require('./runLock');
 
 const header=(m,name)=>m.payload?.headers?.find(h=>h.name?.toLowerCase()===name)?.value||'';
 const parts=p=>[p,...(p.parts||[]).flatMap(parts)];
@@ -51,12 +54,13 @@ function csvCell(value) {
   return '"'+text.replace(/"/g,'""')+'"';
 }
 
-async function testLatestEmails({api,projectRoot,config,verifySignature=verifyPdfSignature,log=console.log}) {
+async function testLatestEmails({api,projectRoot,config,verifySignature=verifyPdfSignature,log=console.log,print=false,choosePrint,printOptions={}}) {
   const {allowedSenders}=validateConfig(config);
   const outputDir=path.resolve(projectRoot,'data','test-runs',new Date().toISOString().replace(/[:.]/g,'-')+'-'+crypto.randomUUID());
-  // This is the only database opened by this command. Never call runOnce,
-  // outputRunInvoices or any print service, and never open the live database.
+  // Never open the live database or invoke the normal run/checkpoint service.
+  // Printing uses separate persistent test print history only when requested.
   const store=openStore(outputDir);
+  const runId=crypto.randomUUID();
   const report={outputDir,startedAt:new Date().toISOString(),checkpointChanged:false,mainResultsChanged:false,printed:false,emails:[],attachments:[]};
   const save=()=>atomicWrite(path.join(outputDir,'test-report.json'),JSON.stringify(report,null,2));
   log('Isolated email test output:',outputDir);save();
@@ -69,7 +73,7 @@ async function testLatestEmails({api,projectRoot,config,verifySignature=verifyPd
         if(!message){entry.status='NO_MATCH';log('No PDF email found:',sender);save();continue;}
         Object.assign(entry,{gmailId:message.id,subject:header(message,'subject'),receivedAt:new Date(Number(message.internalDate)).toISOString(),status:'PROCESSING'});save();
         log('Selected:',entry.subject,'received',entry.receivedAt);
-        const processing=await processMessage(api,message.id,store,outputDir,{allowedSenders:[sender],exportAfter:false,runId:crypto.randomUUID()});
+        const processing=await processMessage(api,message.id,store,outputDir,{allowedSenders:[sender],exportAfter:false,runId});
         entry.processing=processing;
         entry.status=processing.failed||processing.skippedSender?'FAILED':'PROCESSED';
       }catch(error){entry.status='FAILED';entry.error=error.message;log('Test email failed:',sender,error.message);}
@@ -90,12 +94,43 @@ async function testLatestEmails({api,projectRoot,config,verifySignature=verifyPd
     const columns=['sender','email_subject','filename','invoice_number','signature_status','reason','pdf_path'];
     const lines=report.attachments.map(a=>[a.sender,a.subject,a.filename,a.invoiceNumber,a.signature.status,a.signature.reason,a.pdfPath]);
     atomicWrite(path.join(outputDir,'attachment-signatures.csv'),'\uFEFF'+[columns,...lines].map(row=>row.map(csvCell).join(',')).join('\r\n')+'\r\n');
+    const invoiceIds=store.db.prepare("SELECT id FROM invoices WHERE source_run_id=? AND duplicate_of IS NULL AND document_type='TAX_INVOICE' AND normalized_invoice_number IS NOT NULL AND validation_status IN ('VALIDATED','NEEDS_REVIEW') ORDER BY id").all(runId).map(row=>row.id);
+    const printRequested=print===true||invoiceIds.length>0&&choosePrint&&await choosePrint(invoiceIds.length)===true;
+    report.printRequested=Boolean(printRequested);
+    if(printRequested&&invoiceIds.length) {
+      try {
+        const prepared=await saveOriginalInvoices(store,outputDir,{runId,invoiceIds,useDownloads:true});
+        report.printPreparation=prepared.skipped;
+        save();
+        // Repeated tests must not resend successful or uncertain invoice jobs.
+        // This ledger is independent of normal extraction and printing state.
+        const historyDir=path.resolve(projectRoot,'data','test-runs','print-history');
+        const release=acquireRunLock(historyDir);
+        let history;
+        try {
+          history=openStore(historyDir);
+          log('Adobe test printing: close Reader before this batch; keep the desktop unlocked and leave the mouse/keyboard alone during automation.');
+          report.printing=await printOriginalInvoices(history,prepared.invoices,{...printOptions,engine:'adobe',verifySignature,workDir:path.join(outputDir,'print-work')});
+          report.printed=report.printing.submitted.length>0;
+          for(const check of report.printing.signatureChecks) {
+            const invoice=prepared.invoices.find(item=>item.invoiceNumber===check.invoiceNumber);
+            if(invoice)recordSignatureCheck(store,invoice,check);
+          }
+          store.exportAll();
+          atomicWrite(path.join(outputDir,'print-result.json'),JSON.stringify(report.printing,null,2));
+          log('Adobe print submissions:',report.printing.submitted.length,'already printed:',report.printing.skipped.length,'signature blocked:',report.printing.blocked.length,'failed:',report.printing.failed.length,'uncertain:',report.printing.uncertain.length);
+          for(const status of ['blocked','failed','uncertain'])for(const item of report.printing[status])log('Test print '+status+':',item.invoiceNumber,item.reason);
+        }finally{if(history)history.close();release();}
+      }catch(error){report.printError=error.message;report.printed=null;log('Test print error:',error.message,'Check the test print report and Windows printer queue before retrying.');}
+    }
+    if(printRequested&&!invoiceIds.length)log('No eligible unique invoices to print.');
     report.extractionsNeedingReview=store.db.prepare("SELECT count(*) n FROM invoices WHERE validation_status IN ('FAILED','NEEDS_REVIEW')").get().n;
-    report.hasIssues=report.extractionsNeedingReview>0||report.emails.some(e=>e.status!=='PROCESSED')||report.attachments.some(a=>a.signature.status!=='VALID');
+    report.hasIssues=report.extractionsNeedingReview>0||report.emails.some(e=>e.status!=='PROCESSED')||report.attachments.some(a=>a.signature.status!=='VALID')||Boolean(report.printError)||Boolean(report.printPreparation?.length)||['failed','uncertain','blocked'].some(key=>report.printing?.[key]?.length>0);
     report.completedAt=new Date().toISOString();save();
     log('Test invoices CSV:',path.join(outputDir,'invoices.csv'));
     log('All-attachment signature report:',path.join(outputDir,'attachment-signatures.csv'));
-    log('Main results and last-run checkpoint were not read or updated. Nothing was printed.');
+    log('Main results and last-run checkpoint were not read or updated.');
+    if(!report.printRequested)log('Nothing was printed.');
     return report;
   }finally{store.close();}
 }
