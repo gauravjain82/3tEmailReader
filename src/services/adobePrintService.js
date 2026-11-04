@@ -27,10 +27,14 @@ async function checkAdobe({run=execute,env=process.env}={}) {
   }catch(error){throw Error('Adobe readiness check failed: '+failureMessage(error));}
 }
 
-async function submitAdobe({pdfPath,sha256,page,sessionFile,dryRun=false},{run=execute,env=process.env,onProgress=message=>console.log('[Adobe]',message),cleanup}={}) {
+async function submitAdobe({pdfPath,sha256,page,verification,sessionFile,dryRun=false},{run=execute,env=process.env,onProgress=message=>console.log('[Adobe]',message),cleanup}={}) {
   const {PDFDocument,PDFName}=require('pdf-lib');
   const bytes=fs.readFileSync(pdfPath);
   if(crypto.createHash('sha256').update(bytes).digest('hex')!==sha256)throw Object.assign(Error('Original changed before Adobe printing'),{beforeSubmission:true});
+  if(verification?.schemaVersion!==1||verification.status!=='VALID'||verification.sha256!==sha256||!Array.isArray(verification.signatures)||!verification.signatures.length||
+    verification.signatures.some(s=>s.status!=='VALID'||s.intact!==true||s.cryptographicallyValid!==true||s.trusted!==true)||verification.signatures.at(-1).coverage!=='ENTIRE_FILE') {
+    throw Object.assign(Error('Adobe printing requires a complete successful application signature check for these exact PDF bytes'),{beforeSubmission:true});
+  }
   const pdf=await PDFDocument.load(bytes);
   // Reader's range field can use logical page labels. Avoid confusing those
   // labels with the physical page selected by our original-recipient parser.
@@ -39,7 +43,8 @@ async function submitAdobe({pdfPath,sha256,page,sessionFile,dryRun=false},{run=e
   const jobPath=pdfPath+'.adobe-'+crypto.randomUUID()+'.json';
   // A session is shared across the whole batch, including per-invoice folders.
   const sessionPath=sessionFile||path.join(path.dirname(pdfPath),'adobe-session-'+crypto.randomUUID()+'.json');
-  fs.writeFileSync(jobPath,JSON.stringify({pdfPath:path.resolve(pdfPath),sha256,page,sessionFile:sessionPath}));
+  const proof={schemaVersion:1,status:verification.status,sha256:verification.sha256,signatures:verification.signatures.map(({status,intact,cryptographicallyValid,trusted,coverage})=>({status,intact,cryptographicallyValid,trusted,coverage}))};
+  fs.writeFileSync(jobPath,JSON.stringify({pdfPath:path.resolve(pdfPath),sha256,page,verification:proof,sessionFile:sessionPath}));
   const args=[...powershellArgs,'-JobPath',jobPath];
   if(env.ADOBE_READER)args.push('-AdobeExe',env.ADOBE_READER);
   if(dryRun)args.push('-DryRun');
@@ -54,7 +59,7 @@ async function submitAdobe({pdfPath,sha256,page,sessionFile,dryRun=false},{run=e
   try {
     const {stdout}=await run('powershell.exe',args,{windowsHide:true,timeout:150000,maxBuffer:131072,signal:controller.signal});
     const report=JSON.parse(stdout.trim().replace(/^\uFEFF/,''));
-    if(report.error||report.readerValidated!==true||report.page!==page||report.copies!==1||!report.printer||
+    if(report.error||report.applicationVerified!==true||report.page!==page||report.copies!==1||!report.printer||
        (dryRun?report.prepared!==true||report.submitted!==false:report.submitted!==true))throw Error(report.error||'Incomplete Adobe print response');
     fs.writeFileSync(jobPath+'.result.json',JSON.stringify(report,null,2));
     return report;

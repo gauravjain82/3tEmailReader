@@ -43,14 +43,10 @@ function Test-AdobeDocumentWindow($window,[string]$filename) {
     }
     return $false
 }
-function Test-AdobeValidStatus([string]$text) {
-    $text=($text -replace '\s+',' ').Trim()
-    return $text -match '(?i)\ball signatures are valid\b' -and $text -notmatch '(?i)\b(not|invalid|unknown|unverified|attention|require[ds]?|failed)\b'
-}
 function Write-AdobeDiagnostic([string]$file,$windows,$root,[string]$stage,[string]$errorText) {
     # Use the last bounded scan. A fresh UIA query during error handling can hang
     # against the very provider that just failed and prevent Reader cleanup.
     $controls=@()
-    if($script:AdobeControlSnapshot){$controls=@($script:AdobeControlSnapshot)}
+    if($script:AdobeControlSnapshot){$controls=$script:AdobeControlSnapshot.ToArray()}
     @{stage=$stage;error=$errorText;windows=@($windows);controls=$controls;recordedAt=[DateTime]::UtcNow.ToString('o')} | ConvertTo-Json -Depth 7 | Set-Content -LiteralPath $file -Encoding UTF8
 }

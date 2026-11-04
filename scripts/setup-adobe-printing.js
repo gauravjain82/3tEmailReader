@@ -20,6 +20,6 @@ const root=path.resolve(__dirname,'..');
   console.log('In Reader: Preferences > Signatures > Verification > More > enable Verify signatures when the document is opened.');
   console.log('Use the English desktop Reader UI. Close Reader before each batch and leave the desktop unlocked.');
   console.log('Run Test Adobe Printing.cmd with one signed invoice first. It prepares the dialog without clicking Print.');
-  console.log('Then choose Print originals in the extractor. Adobe must report all signatures valid before automation submits one page and one copy.');
+  console.log('Then choose Print originals in the extractor. The application verifies the signatures; Reader opens its Print dialog without waiting for a validation banner, selecting one page and one copy.');
   console.log('To restore SumatraPDF, set PRINT_ENGINE=sumatra in .env.');
 })().catch(error=>{console.error(error.message);process.exitCode=1;});

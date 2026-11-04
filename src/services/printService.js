@@ -63,7 +63,7 @@ async function printOriginalInvoices(store,invoices,{platform=process.platform,f
     try {
       // First original-recipient page only, one copy, from the verified original bytes.
       // Pass arguments directly without a shell, including paths with spaces.
-      if(engine==='adobe')await adobeSubmit({pdfPath:path.resolve(printPath),sha256:sourceHash,page,sessionFile:adobeSessionFile});
+      if(engine==='adobe')await adobeSubmit({pdfPath:path.resolve(printPath),sha256:sourceHash,page,verification:signature,sessionFile:adobeSessionFile});
       else await run(executable,['-print-to-default','-print-settings',`${page},1x,simplex,fit`,'-silent',path.resolve(printPath)],{windowsHide:true,timeout:120000,maxBuffer:16384});
       store.db.prepare("UPDATE print_jobs SET status='submitted',updated_at=?,error=NULL WHERE invoice_number=?").run(new Date().toISOString(),item.invoiceNumber);
       result.submitted.push(item.invoiceNumber);

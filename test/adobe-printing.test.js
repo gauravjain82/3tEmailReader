@@ -7,6 +7,7 @@ const crypto=require('crypto');
 const {spawnSync}=require('child_process');
 const {PDFDocument,PDFName,PDFDict}=require('pdf-lib');
 const {checkAdobe,submitAdobe}=require('../src/services/adobePrintService');
+const approved=hash=>({schemaVersion:1,status:'VALID',sha256:hash,signatures:[{status:'VALID',intact:true,cryptographicallyValid:true,trusted:true,coverage:'ENTIRE_FILE'}]});
 async function fixture(t) {
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'invoice-adobe-test-'));
   t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
@@ -16,18 +17,19 @@ async function fixture(t) {
 }
 test('Adobe dry run passes complete bytes and a single physical page without submitting',async t=>{
   const {file,hash,bytes}=await fixture(t);let job;
-  const report=await submitAdobe({pdfPath:file,sha256:hash,page:2,dryRun:true},{env:{},run:async(command,args,options)=>{
+  const report=await submitAdobe({pdfPath:file,sha256:hash,page:2,verification:approved(hash),dryRun:true},{env:{},run:async(command,args,options)=>{
     assert.equal(command,'powershell.exe');assert.ok(args.includes('-STA'));assert.ok(args.includes('-DryRun'));assert.equal(options.windowsHide,true);assert.equal(options.shell,undefined);
     job=JSON.parse(fs.readFileSync(args[args.indexOf('-JobPath')+1]));
     assert.equal(job.page,2);assert.equal(job.sha256,hash);assert.deepEqual(fs.readFileSync(job.pdfPath),bytes);
-    return {stdout:JSON.stringify({readerValidated:true,prepared:true,submitted:false,page:2,copies:1,printer:'Default physical printer'})};
+    assert.equal(job.verification.sha256,hash);
+    return {stdout:JSON.stringify({applicationVerified:true,readerValidated:null,validationSource:'application',prepared:true,submitted:false,page:2,copies:1,printer:'Default physical printer'})};
   }});
   assert.equal(report.submitted,false);assert.deepEqual(fs.readFileSync(file),bytes);
 });
 test('Adobe failures distinguish pre-submission errors from uncertain Print invocation',async t=>{
   const {file,hash}=await fixture(t);
   for(const invoked of [false,true]) {
-    await assert.rejects(submitAdobe({pdfPath:file,sha256:hash,page:1},{env:{},run:async(_command,args)=>{
+    await assert.rejects(submitAdobe({pdfPath:file,sha256:hash,page:1,verification:approved(hash)},{env:{},run:async(_command,args)=>{
       const jobPath=args[args.indexOf('-JobPath')+1];
       if(invoked)fs.writeFileSync(jobPath+'.state.json','{"phase":"invoking"}');
       throw Error('Timeout');
@@ -36,11 +38,12 @@ test('Adobe failures distinguish pre-submission errors from uncertain Print invo
 });
 test('Adobe rejects incomplete success, invalid page requests and ambiguous logical page labels',async t=>{
   const {file,hash,pdf}=await fixture(t);
-  await assert.rejects(submitAdobe({pdfPath:file,sha256:hash,page:1},{env:{},run:async()=>({stdout:JSON.stringify({submitted:true,page:1,copies:1,printer:'Printer'})})}),/Incomplete/);
-  await assert.rejects(submitAdobe({pdfPath:file,sha256:hash,page:3},{run:()=>assert.fail('Must not open Reader')}),/Invalid Adobe print page/);
+  await assert.rejects(submitAdobe({pdfPath:file,sha256:hash,page:1,verification:approved(hash)},{env:{},run:async()=>({stdout:JSON.stringify({submitted:true,page:1,copies:1,printer:'Printer'})})}),/Incomplete/);
+  await assert.rejects(submitAdobe({pdfPath:file,sha256:hash,page:3,verification:approved(hash)},{run:()=>assert.fail('Must not open Reader')}),/Invalid Adobe print page/);
   pdf.catalog.set(PDFName.of('PageLabels'),PDFDict.withContext(pdf.context));
   const bytes=Buffer.from(await pdf.save());fs.writeFileSync(file,bytes);
-  await assert.rejects(submitAdobe({pdfPath:file,sha256:crypto.createHash('sha256').update(bytes).digest('hex'),page:1},{run:()=>assert.fail('Must not open Reader')}),/custom page labels/);
+  const updatedHash=crypto.createHash('sha256').update(bytes).digest('hex');
+  await assert.rejects(submitAdobe({pdfPath:file,sha256:updatedHash,page:1,verification:approved(updatedHash)},{run:()=>assert.fail('Must not open Reader')}),/custom page labels/);
 });
 test('Adobe readiness only probes the helper without opening or printing a PDF',async()=>{
   const ready=await checkAdobe({env:{ADOBE_READER:'C:\\Adobe\\Acrobat.exe'},run:async(command,args)=>{
@@ -58,21 +61,12 @@ test('Adobe PowerShell controller parses on Windows without executing print comm
   }
 });
 
-test('Adobe validation status normalization accepts Reader chrome text and rejects negative statements',t=>{
-  if(process.platform!=='win32')return t.skip('Windows PowerShell helper check');
-  const file=path.resolve('scripts/adobe-ui.ps1').replace(/'/g,"''");
-  const command=`. '${file}'; $cases=@('Signed and all signatures are valid.','Signature Panel: All signatures are valid. View details','Signed and all  signatures are valid.','Not all signatures are valid','All signatures are valid but attention is required','All signatures are valid: NOT VERIFIED','Signature validity unknown'); foreach($case in $cases){[int](Test-AdobeValidStatus $case)}`;
-  const parsed=spawnSync('powershell.exe',['-NoProfile','-Command',command],{encoding:'utf8',windowsHide:true,timeout:15000});
-  assert.equal(parsed.status,0,parsed.stderr);
-  assert.deepEqual(parsed.stdout.trim().split(/\r?\n/),['1','1','1','0','0','0','0']);
-});
-
 test('Adobe worker errors retain their stage and run cleanup only before a Print invocation',async t=>{
   const {file,hash}=await fixture(t);let cleanupCalls=0;
   const progress=[];
   for(const invoked of [false,true]) {
     let resultPath;
-    await assert.rejects(submitAdobe({pdfPath:file,sha256:hash,page:1},{env:{},onProgress:stage=>progress.push(stage),cleanup:async()=>{cleanupCalls++;},run:async(_command,args)=>{
+    await assert.rejects(submitAdobe({pdfPath:file,sha256:hash,page:1,verification:approved(hash)},{env:{},onProgress:stage=>progress.push(stage),cleanup:async()=>{cleanupCalls++;},run:async(_command,args)=>{
       const jobPath=args[args.indexOf('-JobPath')+1];resultPath=jobPath+'.result.json';
       if(invoked)fs.writeFileSync(jobPath+'.state.json','{"phase":"invoking"}');
       throw Object.assign(Error('Worker failed'),{stdout:JSON.stringify({stage:'Selecting printer',error:'Printer selector unavailable'})});
@@ -84,11 +78,31 @@ test('Adobe worker errors retain their stage and run cleanup only before a Print
 
 test('Adobe progress is displayed while the worker is still running',async t=>{
   const {file,hash}=await fixture(t);const progress=[];
-  await submitAdobe({pdfPath:file,sha256:hash,page:1,dryRun:true},{env:{},onProgress:message=>progress.push(message),run:async(_command,args)=>{
+  await submitAdobe({pdfPath:file,sha256:hash,page:1,verification:approved(hash),dryRun:true},{env:{},onProgress:message=>progress.push(message),run:async(_command,args)=>{
     const jobPath=args[args.indexOf('-JobPath')+1];
-    fs.writeFileSync(jobPath+'.progress.json',JSON.stringify({stage:'Waiting for Reader validation'}));
+    fs.writeFileSync(jobPath+'.progress.json',JSON.stringify({stage:'Opening Print dialog'}));
     await new Promise(resolve=>setTimeout(resolve,700));
-    assert.ok(progress.includes('Waiting for Reader validation'));
-    return {stdout:JSON.stringify({readerValidated:true,prepared:true,submitted:false,page:1,copies:1,printer:'Physical printer'})};
+    assert.ok(progress.includes('Opening Print dialog'));
+    return {stdout:JSON.stringify({applicationVerified:true,readerValidated:null,prepared:true,submitted:false,page:1,copies:1,printer:'Physical printer'})};
   }});
+});
+
+test('Adobe cannot print without a complete application signature check bound to the PDF hash',async t=>{
+  const {file,hash}=await fixture(t);
+  const valid=approved(hash);
+  for(const verification of [undefined,{...valid,status:'UNKNOWN'},{...valid,sha256:'different'},{...valid,signatures:[]},{...valid,signatures:[{...valid.signatures[0],trusted:false}]},{...valid,signatures:[{...valid.signatures[0],coverage:'ENTIRE_REVISION'}]}]) {
+    await assert.rejects(submitAdobe({pdfPath:file,sha256:hash,page:1,verification},{run:()=>assert.fail('Unverified PDF must not open Reader')}),error=>error.beforeSubmission===true&&/application signature check/.test(error.message));
+  }
+});
+
+test('Adobe diagnostic writes cached controls as JSON on Windows PowerShell',async t=>{
+  if(process.platform!=='win32')return t.skip('Windows PowerShell diagnostic check');
+  const {dir}=await fixture(t);
+  const script=path.join(dir,'diagnostic-test.ps1'),output=path.join(dir,'diagnostic.json');
+  const helper=path.resolve('scripts/adobe-ui.ps1').replace(/'/g,"''");
+  fs.writeFileSync(script,`param([string]$OutputPath)\n$ErrorActionPreference='Stop'\n. '${helper}'\n$script:AdobeControlSnapshot=New-Object System.Collections.Generic.List[object]\n$script:AdobeControlSnapshot.Add(@{name='Reader toolbar';type='ControlType.ToolBar'})\nWrite-AdobeDiagnostic $OutputPath @(@{title='Reader';handle=1}) $null 'Opening Print dialog' 'Example failure'\n`);
+  const result=spawnSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',script,'-OutputPath',output],{encoding:'utf8',windowsHide:true,timeout:15000});
+  assert.equal(result.status,0,result.stdout+result.stderr);
+  const diagnostic=JSON.parse(fs.readFileSync(output,'utf8').replace(/^\uFEFF/,''));
+  assert.equal(diagnostic.controls[0].name,'Reader toolbar');assert.equal(diagnostic.stage,'Opening Print dialog');
 });

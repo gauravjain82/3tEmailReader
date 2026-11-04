@@ -71,7 +71,14 @@ public static class InvoiceAdobeWindow {
     if(!$JobPath){throw 'Missing Adobe print job file'}
     $job=Get-Content -LiteralPath $JobPath -Raw | ConvertFrom-Json
     if(!$job.pdfPath -or ![IO.Path]::IsPathRooted($job.pdfPath) -or $job.sha256 -notmatch '^[a-f0-9]{64}$' -or $job.page -isnot [int] -or $job.page -lt 1){throw 'Invalid Adobe print job'}
+    $proof=$job.verification
+    if(!$proof -or $proof.schemaVersion -ne 1 -or $proof.status -ne 'VALID' -or $proof.sha256 -ne $job.sha256 -or @($proof.signatures).Count -lt 1){throw 'Missing application signature verification for this PDF'}
+    foreach($signature in $proof.signatures) {
+        if($signature.status -ne 'VALID' -or $signature.intact -ne $true -or $signature.cryptographicallyValid -ne $true -or $signature.trusted -ne $true){throw 'Incomplete application signature verification'}
+    }
+    if($proof.signatures[-1].coverage -ne 'ENTIRE_FILE'){throw 'Application verification does not cover the complete PDF'}
     if((Get-FileHash -LiteralPath $job.pdfPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $job.sha256){throw 'Verified original PDF changed before Adobe printing'}
+    $result.applicationVerified=$true
     if((Get-Process -Id $PID).SessionId -eq 0 -or ![Environment]::UserInteractive){throw 'Adobe automation needs an unlocked interactive Windows desktop'}
     $existing=@(Get-AdobeWindows)
     $baselineHandles=@($existing | ForEach-Object {$_.handle})
@@ -149,23 +156,12 @@ public static class InvoiceAdobeWindow {
         $owner=Get-Process -Id $readerWindow.Current.ProcessId
         @{processId=$owner.Id;startTicks=$owner.StartTime.Ticks.ToString();handle=$ownedHandle.ToInt64();filename=[IO.Path]::GetFileName($job.pdfPath)} | ConvertTo-Json -Compress | Set-Content -LiteralPath $job.sessionFile -Encoding UTF8
     }
-    # A positive Reader validation status is required as well as the application's
-    # independent cryptographic verification. Never replace the appearance ourselves.
-    Progress 'Waiting for Reader to report all signatures valid (up to 35 seconds)'
-    $deadline=[DateTime]::UtcNow.AddSeconds(35)
-    $validated=$false
-    $positiveReads=0
-    while([DateTime]::UtcNow -lt $deadline) {
-        $all=@(Get-AdobeControls $readerWindow)
-        $positive=@($all | Where-Object {!$_.Current.IsOffscreen -and $_.Current.IsEnabled -and $_.Current.ControlType -ne [System.Windows.Automation.ControlType]::Window -and $_.Current.ControlType -ne [System.Windows.Automation.ControlType]::Document -and $_.Current.ControlType -ne [System.Windows.Automation.ControlType]::TabItem -and (Test-AdobeValidStatus $_.Current.Name)})
-        if($positive.Count){$positiveReads++}else{$positiveReads=0}
-        if($positiveReads -ge 3){$validated=$true;break}
-        $validate=Named $readerWindow ([System.Windows.Automation.ControlType]::Button) '^Validate All( Signatures)?$'
-        if($validate.Count -eq 1){Invoke $validate[0]}
-        Start-Sleep -Milliseconds 500
-    }
-    if(!$validated){throw 'Reader did not expose an all-signatures-valid status. Enable verification when opening documents in Reader Preferences > Signatures > Verification, and resolve Reader trust/accessibility prompts. No print submitted.'}
-    $result.readerValidated=$true
+    # The application has already validated every signature, the chain,
+    # revocation and exact source hash. Reader only renders/prints the original.
+    # Its visual tick/status is not reliably exposed through accessibility APIs.
+    # Do not wait for an English banner or claim Reader status was observed.
+    $result.readerValidated=$null
+    $result.validationSource='application'
     Progress 'Opening the Print dialog'
     $handle=$ownedHandle
     [InvoiceAdobeWindow]::SetForegroundWindow($handle) | Out-Null
