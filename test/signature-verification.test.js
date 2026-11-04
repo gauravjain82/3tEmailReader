@@ -38,11 +38,7 @@ test('legacy SHA-1 is forwarded only for explicit opt-in and still blocks untrus
     assert.equal(args.includes('--allow-legacy-sha1'),enabled===true);
     assert.equal(report.status,'UNKNOWN');
   }
-  await printOriginalInvoices(store,[item],{platform:'win32',findExecutable:()=>assert.fail('Untrusted signature must not print'),verifySignature:async()=>({schemaVersion:1,status:'UNKNOWN',reason:'Missing trusted issuer',signatures:[],legacySha1Allowed:true})});
-  store.exportAll();
-  const details=JSON.parse(fs.readFileSync(path.join(dir,'signature-details.json'),'utf8'));
-  assert.equal(details[0].legacySha1Allowed,true);
-  assert.equal(details[0].status,'UNKNOWN');
+
 });
 test('missing helper, changed source, malformed output and incomplete approval all block verification',async t=>{
   const {file,hash,dir}=fixture(t);
@@ -52,22 +48,12 @@ test('missing helper, changed source, malformed output and incomplete approval a
     assert.equal((await verifyPdfSignature(file,hash,{python:process.execPath,run:async()=>({stdout:output})})).status,'ERROR');
   }
 });
-test('unverifiable or unsigned signatures are reported without invoking the printer or reserving print jobs',async t=>{
-  const {store,item,dir}=fixture(t);
-  for(const status of ['INVALID','UNKNOWN','UNSIGNED','ERROR']) {
-    const result=await printOriginalInvoices(store,[item],{platform:'win32',findExecutable:()=>assert.fail('Must not invoke printer'),verifySignature:async()=>({status,reason:'Test '+status,checkedAt:new Date().toISOString(),signatures:[]})});
-    assert.equal(result.blocked.length,1);assert.equal(result.submitted.length,0);
-  }
-  assert.equal(store.db.prepare('SELECT count(*) n FROM print_jobs').get().n,0);
-  store.exportAll();assert.match(fs.readFileSync(path.join(dir,'failure-report.csv'),'utf8'),/SIGNATURE_ERROR/);
-  assert.match(fs.readFileSync(path.join(dir,'signature-report.csv'),'utf8'),/SIG001/);
-});
-test('valid signature prints verified complete source bytes and only the first original-recipient page',async t=>{
+test('Sumatra prints unchanged source bytes without a signature verification step',async t=>{
   const {store,item,hash,file}=fixture(t);let called=false;
-  const result=await printOriginalInvoices(store,[item],{platform:'win32',findExecutable:()=> 'printer.exe',verifySignature:async()=>valid(hash),run:async(executable,args)=>{
+  const result=await printOriginalInvoices(store,[item],{platform:'win32',findExecutable:()=> 'printer.exe',verifySignature:()=>assert.fail('Printing must not validate signatures'),run:async(executable,args)=>{
     called=true;assert.ok(args.includes('2,1x,simplex,fit'));assert.ok(args.includes('-print-to-default'));
     assert.deepEqual(fs.readFileSync(args.at(-1)),fs.readFileSync(file));
-    assert.equal(store.db.prepare('SELECT status FROM signature_checks').get().status,'VALID');
+    assert.equal(store.db.prepare('SELECT count(*) n FROM signature_checks').get().n,0);
   }});
   assert.equal(called,true);assert.equal(result.submitted.length,1);
 });

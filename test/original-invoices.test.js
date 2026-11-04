@@ -14,7 +14,6 @@ const {printOriginalInvoices,findSumatra} = require('../src/services/printServic
 const {chooseInvoiceAction} = require('../src/services/invoiceOutputService');
 const {runOnce} = require('../src/services/runOnceService');
 const {clearPreviousResults} = require('../src/services/freshResultsService');
-const mockSignatureValid=async()=>({status:'VALID',reason:'Mocked signature check for printer submission tests',checkedAt:new Date().toISOString(),signatures:[]});
 
 function fixture(t) {
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'invoice-original-test-'));
@@ -93,15 +92,15 @@ test('download-based test printing selects the recipient page when it is not PDF
   const report=await saveOriginalInvoices(store,dir,{...selection,useDownloads:true});
   assert.deepEqual(report.invoices[0].pages,[2]);assert.equal(report.invoices[0].printPage,2);
   let page;
-  const printed=await printOriginalInvoices(store,report.invoices,{platform:'win32',engine:'adobe',verifySignature:mockSignatureValid,adobeSubmit:async job=>{
-    page=job.page;assert.deepEqual(fs.readFileSync(job.pdfPath),bytes);
+  const printed=await printOriginalInvoices(store,report.invoices,{platform:'win32',findExecutable:()=> 'SumatraPDF.exe',run:async(_exe,args)=>{
+    page=Number(args[args.indexOf('-print-settings')+1].split(',')[0]);assert.deepEqual(fs.readFileSync(args.at(-1)),bytes);
   }});
   assert.equal(printed.submitted.length,1);assert.equal(page,2);
 });
 test('printing submits only page one through the default printer and skips repeat attempts, including after fresh reset',async t=>{
   const {store,dir,selection}=await seed(t,['Original For Recipient','Continuation page','Duplicate For Transporter']);const report=await saveOriginalInvoices(store,dir,selection);const calls=[];
   assert.equal((await PDFDocument.load(fs.readFileSync(report.invoices[0].pdfPath))).getPageCount(),2);
-  const options={platform:'win32',findExecutable:()=> 'C:\\SumatraPDF.exe',verifySignature:mockSignatureValid,run:async(...args)=>{calls.push(args);}};
+  const options={platform:'win32',findExecutable:()=> 'C:\\SumatraPDF.exe',run:async(...args)=>{calls.push(args);}};
   const result=await printOriginalInvoices(store,report.invoices,options);assert.equal(result.submitted.length,1);assert.equal(calls.length,1);
   assert.ok(calls[0][1].includes('-print-to-default'));assert.ok(calls[0][1].includes('1,1x,simplex,fit'));assert.equal(calls[0][2].windowsHide,true);assert.equal(calls[0][2].shell,undefined);
   assert.equal((await printOriginalInvoices(store,report.invoices,options)).skipped.length,1);assert.equal(calls.length,1);
@@ -110,50 +109,27 @@ test('printing submits only page one through the default printer and skips repea
 });
 test('uncertain printer results are recorded and not automatically printed again',async t=>{
   const {store,dir,selection}=await seed(t);const report=await saveOriginalInvoices(store,dir,selection);let calls=0;
-  const options={platform:'win32',findExecutable:()=> 'C:\\SumatraPDF.exe',verifySignature:mockSignatureValid,run:async()=>{calls++;throw Error('Printer timed out');}};
+  const options={platform:'win32',findExecutable:()=> 'C:\\SumatraPDF.exe',run:async()=>{calls++;throw Error('Printer timed out');}};
   assert.equal((await printOriginalInvoices(store,report.invoices,options)).uncertain.length,1);
   assert.equal(store.db.prepare('SELECT status FROM print_jobs').get().status,'uncertain');
   assert.equal((await printOriginalInvoices(store,report.invoices,options)).skipped.length,1);assert.equal(calls,1);
 });
 
-test('Adobe prints the selected original page from unchanged complete bytes and preserves duplicate protection',async t=>{
+test('Sumatra prints without signature checks or Adobe and preserves duplicate protection',async t=>{
   const {store,dir,selection,bytes}=await seed(t);
   const report=await saveOriginalInvoices(store,dir,selection);const calls=[];
-  const options={platform:'win32',engine:'adobe',verifySignature:mockSignatureValid,findExecutable:()=>assert.fail('No Sumatra fallback'),run:()=>assert.fail('No Sumatra printing'),adobeSubmit:async job=>{
-    calls.push(job);assert.equal(job.page,1);assert.deepEqual(fs.readFileSync(job.pdfPath),bytes);
+  const options={platform:'win32',engine:'adobe',verifySignature:()=>assert.fail('No signature checks'),adobeSubmit:()=>assert.fail('No Adobe'),findExecutable:()=> 'SumatraPDF.exe',run:async(exe,args)=>{
+    calls.push(args);assert.equal(exe,'SumatraPDF.exe');assert.ok(args.includes('1,1x,simplex,fit'));assert.deepEqual(fs.readFileSync(args.at(-1)),bytes);
   }};
   assert.equal((await printOriginalInvoices(store,report.invoices,options)).submitted.length,1);
   assert.equal((await printOriginalInvoices(store,report.invoices,options)).skipped.length,1);
   assert.equal(calls.length,1);
 });
 
-test('Adobe never prints a blocked signature and never retries an uncertain dialog submission',async t=>{
-  const {store,dir,selection}=await seed(t);const report=await saveOriginalInvoices(store,dir,selection);
-  const options={platform:'win32',engine:'adobe',verifySignature:async()=>({status:'UNKNOWN',reason:'Untrusted'}),adobeSubmit:()=>assert.fail('Blocked signatures cannot reach Reader')};
-  assert.equal((await printOriginalInvoices(store,report.invoices,options)).blocked.length,1);
-  options.verifySignature=mockSignatureValid;
-  options.adobeSubmit=async()=>{throw Object.assign(Error('Dialog unavailable'),{beforeSubmission:true});};
-  assert.equal((await printOriginalInvoices(store,report.invoices,options)).failed.length,1);
-  options.adobeSubmit=async()=>{throw Object.assign(Error('Timeout after invocation'),{beforeSubmission:false});};
-  assert.equal((await printOriginalInvoices(store,report.invoices,options)).uncertain.length,1);
-  options.adobeSubmit=()=>assert.fail('Uncertain submission must not retry');
-  assert.equal((await printOriginalInvoices(store,report.invoices,options)).skipped.length,1);
-});
-
-test('Adobe automation failure stops the batch before opening another invoice',async t=>{
-  const {store,dir,selection}=await seed(t);const report=await saveOriginalInvoices(store,dir,selection);
-  const invoices=[report.invoices[0],{...report.invoices[0],invoiceNumber:'OTHER002'}];let calls=0;
-  const printed=await printOriginalInvoices(store,invoices,{platform:'win32',engine:'adobe',verifySignature:mockSignatureValid,adobeSubmit:async()=>{
-    calls++;throw Object.assign(Error('Reader window unavailable'),{beforeSubmission:true});
-  }});
-  assert.equal(calls,1);assert.equal(printed.failed.length,1);
-  assert.deepEqual(printed.unattempted.map(i=>i.invoiceNumber),['OTHER002']);
-  assert.equal(store.db.prepare("SELECT count(*) n FROM print_jobs WHERE invoice_number='OTHER002'").get().n,0);
-});
 test('missing printing utility does not reserve jobs; altered prepared PDFs are not submitted',async t=>{
   const {store,dir,selection}=await seed(t);const report=await saveOriginalInvoices(store,dir,selection);
   assert.throws(()=>findSumatra({}),/Install SumatraPDF/);
-  await assert.rejects(printOriginalInvoices(store,report.invoices,{platform:'win32',verifySignature:mockSignatureValid,findExecutable:()=>{throw Error('Missing utility');}}),/Missing utility/);
+  await assert.rejects(printOriginalInvoices(store,report.invoices,{platform:'win32',findExecutable:()=>{throw Error('Missing utility');}}),/Missing utility/);
   assert.equal(store.db.prepare('SELECT count(*) n FROM print_jobs').get().n,0);
   fs.writeFileSync(report.invoices[0].pdfPath,'changed');
   const result=await printOriginalInvoices(store,report.invoices,{platform:'win32',findExecutable:()=> 'fake.exe',run:async()=>assert.fail('Must not print')});

@@ -89,3 +89,19 @@ test('read-only diagnostics distinguish configured extraction from a virtual pri
   assert.ok(!JSON.stringify(status).includes('private-'));assert.ok(calls.every(([,args])=>!args.includes('ci') && !args.includes('install')));
   assert.equal(fs.existsSync(path.join(dir,'data')),false);assert.equal(fs.existsSync(path.join(dir,'.env')),false);
 });
+
+test('Sumatra printing readiness ignores legacy Adobe and signature settings and needs no Python or certificates',t=>{
+  const dir=fixture(t),sumatra=path.join(dir,'SumatraPDF.exe');fs.writeFileSync(sumatra,'fake executable');
+  fs.writeFileSync(path.join(dir,'credentials.json'),JSON.stringify({installed:{client_id:'test-client',client_secret:'test-secret'}}));
+  fs.writeFileSync(path.join(dir,'token.json'),JSON.stringify({refresh_token:'test-token'}));
+  fs.writeFileSync(path.join(dir,'config.json'),JSON.stringify({allowedSenders:['billing@company.test'],firstRunAfter:null}));
+  const calls=[];
+  const status=collectStatus(dir,{env:{PRINT_ENGINE:'adobe',SIGNATURE_PYTHON:'missing-verifier',SUMATRA_PDF:sumatra},platform:'win32',run:(command,args)=>{
+    calls.push(args);
+    if(command===process.execPath)return {ok:true,text:''};
+    if(command==='powershell.exe')return {ok:true,text:JSON.stringify({name:'Physical printer',valid:true})};
+    return {ok:false,text:''};
+  }});
+  assert.equal(status.printEngine,'sumatra');assert.equal(status.signatureVerifier,false);assert.equal(status.certificates,false);
+  assert.equal(status.printingPrerequisitesReady,true);assert.ok(calls.every(args=>!args.includes('-Check')));
+});

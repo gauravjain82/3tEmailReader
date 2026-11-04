@@ -153,7 +153,6 @@ function openStore(dataDir) {
     // Downloads can fail before an invoice row exists; include those attachments too.
     for (const row of db.prepare("SELECT a.* FROM attachments a LEFT JOIN invoices i ON i.gmail_id=a.gmail_id AND i.attachment_key=a.attachment_key WHERE a.status='failed' AND i.id IS NULL ORDER BY a.id").all()) failures.push({...row,status:'FAILED',invoice_number:null,pdf_path:null,reason:row.error || 'Attachment processing failed'});
     const checks=db.prepare('SELECT s.*,i.filename,i.gmail_id,i.attachment_key FROM signature_checks s JOIN invoices i ON i.normalized_invoice_number=s.invoice_number AND i.sha256=s.source_sha256 AND i.duplicate_of IS NULL ORDER BY i.id').all();
-    for (const check of checks.filter(c=>c.status!=='VALID')) failures.push({...check,status:'SIGNATURE_'+check.status,pdf_path:check.source_pdf_path,processed_at:check.checked_at});
     atomicWrite(path.join(dataDir,'failure-report.csv'),[failureColumns.join(','),...failures.map(r=>failureColumns.map(c=>csvCell(r[c])).join(','))].join('\r\n')+'\r\n');
     const signatureColumns=['invoice_number','filename','status','reason','checked_at','source_pdf_path','source_sha256'];
     atomicWrite(path.join(dataDir,'signature-report.csv'),[signatureColumns.join(','),...checks.map(r=>signatureColumns.map(c=>csvCell(r[c])).join(','))].join('\r\n')+'\r\n');

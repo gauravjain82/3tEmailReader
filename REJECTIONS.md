@@ -55,7 +55,7 @@ Earlier sample exports that used reference Excel values are historical outputs; 
 
 ## Optional local handwriting-model experiment
 
-To install the handwriting model for only the top Ack No and lower Ack Date lines, install **Python 3.12 64-bit** and run **Setup.cmd**, choosing Yes for handwriting in step 4. Main setup uses the exact same selected Python patch version for Gmail signatures and handwriting (tested: 3.12.10), with separate package environments. Existing environments with different Python versions are backed up and rebuilt. To install/retry only the handwriting component, double-click **Setup Handwriting OCR.cmd**. This creates `.handwriting-venv`, installs CPU-only PyTorch/Transformers, and downloads Microsoft's `trocr-base-handwritten` model at the pinned revision. The model is approximately 1.3 GB, in addition to Python packages, and is stored under `rejections/models`.
+To install the handwriting model for only the top Ack No and lower Ack Date lines, install **Python 3.12 64-bit** and run **Setup.cmd**, choosing Yes for handwriting in step 4. Python is used only for the optional handwriting model (tested: 3.12.10); Gmail extraction and SumatraPDF printing do not require Python. Existing environments with different Python versions are backed up and rebuilt. To install/retry only the handwriting component, double-click **Setup Handwriting OCR.cmd**. This creates `.handwriting-venv`, installs CPU-only PyTorch/Transformers, and downloads Microsoft's `trocr-base-handwritten` model at the pinned revision. The model is approximately 1.3 GB, in addition to Python packages, and is stored under `rejections/models`.
 
 After setup, double-click **Test Handwriting OCR.cmd** and enter the rejection PDF path, or run:
 

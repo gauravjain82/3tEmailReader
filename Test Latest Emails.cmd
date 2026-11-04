@@ -5,7 +5,7 @@ title Test Latest Configured Emails
 echo Test the latest PDF email from EACH sender configured in config.json.
 echo This ignores the last-run time and saves separate test results.
 echo It does not update the normal results, checkpoint or last-run batch.
-echo After parsing, choose whether to print unique test invoices through Adobe Reader.
+echo After parsing, choose whether to print unique test invoices through SumatraPDF.
 where node >nul 2>nul
 if errorlevel 1 (
   echo Node.js was not found. Run Setup.cmd first.

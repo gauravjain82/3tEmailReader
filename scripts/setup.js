@@ -75,14 +75,8 @@ function collectStatus(projectRoot=root,{run=probe,env=process.env,version=proce
   const pythonVersionsMatch=supportedRuntime(signaturePython)&&supportedRuntime(handwritingPython)&&signaturePython.version.join('.')===handwritingPython.version.join('.');
   const candidates=[configured.SUMATRA_PDF,configured.LOCALAPPDATA && path.join(configured.LOCALAPPDATA,'SumatraPDF','SumatraPDF.exe'),configured.ProgramFiles && path.join(configured.ProgramFiles,'SumatraPDF','SumatraPDF.exe'),configured['ProgramFiles(x86)'] && path.join(configured['ProgramFiles(x86)'],'SumatraPDF','SumatraPDF.exe')].filter(Boolean);
   const sumatra=candidates.some(f=>path.isAbsolute(f) && /\.exe$/i.test(f) && fs.existsSync(f));
-  const printEngine=configured.PRINT_ENGINE||'sumatra';
-  let adobe={ready:false};
-  if(printEngine==='adobe'&&platform==='win32') {
-    const args=['-NoProfile','-STA','-ExecutionPolicy','Bypass','-File',path.join(projectRoot,'scripts','adobe-print.ps1'),'-Check'];
-    if(configured.ADOBE_READER)args.push('-AdobeExe',configured.ADOBE_READER);
-    const result=run('powershell.exe',args,projectRoot);
-    if(result.ok)try{adobe=JSON.parse(result.text.replace(/^\uFEFF/,''));}catch{}
-  }
+  // Ignore obsolete PRINT_ENGINE=adobe values retained in existing local .env files.
+  const printEngine='sumatra';
   let printer={name:'Not checked',valid:false,physical:false};
   if(platform==='win32') {
     const result=run('powershell.exe',['-NoProfile','-Command',"Add-Type -AssemblyName System.Drawing; $invoiceSetupPrinter=New-Object System.Drawing.Printing.PrinterSettings; @{name=$invoiceSetupPrinter.PrinterName;valid=$invoiceSetupPrinter.IsValid}|ConvertTo-Json -Compress"],projectRoot);
@@ -95,29 +89,21 @@ function collectStatus(projectRoot=root,{run=probe,env=process.env,version=proce
   status.legacyAdapter=legacyAdapter;
   status.legacySha1Enabled=configured.SIGNATURE_ALLOW_LEGACY_SHA1==='true';
   status.printEngine=printEngine;
-  status.adobe=adobe;
-  status.printingPrerequisitesReady=status.extractionReady && status.signatureVerifier && status.certificates && status.legacyAdapter && (printEngine==='adobe'?adobe.ready===true:printEngine==='sumatra'&&status.sumatra) && status.printer.physical;
+  status.printingPrerequisitesReady=status.extractionReady && status.sumatra && status.printer.physical;
   status.localRejectionReady=status.node&&status.rejectionDependencies;
-  status.localHandwritingReady=status.localRejectionReady&&status.handwritingDependencies&&status.handwritingModel&&(!signaturePython||status.pythonVersionsMatch);
+  status.localHandwritingReady=status.localRejectionReady&&status.handwritingDependencies&&status.handwritingModel;
   return status;
 }
 function showStatus(status) {
   console.log('\nMachine setup checks:');
-  for(const [key,label] of Object.entries({node:'Node.js 22/24',dependencies:'Node dependencies and SQLite binary',senders:'Configured sender addresses',credentials:'Gmail OAuth client file',gmailToken:'Gmail connection token',python:'Python 3.12, 64-bit',signatureVerifier:'Signature verifier',rejectionDependencies:'Local rejection parser / Windows-Tesseract OCR packages',handwritingDependencies:'Local handwriting Python packages (optional for Gmail)',handwritingModel:'Local TrOCR model files (optional for Gmail)',pythonVersionsMatch:'Signature and handwriting Python versions match'}))console.log(`  ${status[key]?'OK':'ACTION NEEDED'}  ${label}`);
-  const engineReady=status.printEngine==='adobe'?status.adobe.ready:status.printEngine==='sumatra'&&status.sumatra;
-  console.log(`  ${engineReady?'OK':'ACTION NEEDED'}  Print engine: ${status.printEngine==='adobe'?'Adobe Reader (run Test Adobe Printing.cmd on this PC)':status.printEngine}`);
-  console.log('  Signature Python:',status.signaturePythonVersion,'| Handwriting Python:',status.handwritingPythonVersion);
-  console.log(`  ${status.certificates?'OK':'ACTION NEEDED'}  Bundled CA fingerprints, validity and chains (${status.certificateCheck.count}/7)`);
-  for(const issue of status.certificateCheck.issues)console.log('    '+issue);
-  console.log('  Active certificate folder:',status.certificateCheck.trustDir);
-  console.log(`  ${status.legacyAdapter?'OK':'ACTION NEEDED'}  Legacy PDF signature adapter files`);
-  console.log(`  ${status.legacySha1Enabled?'ENABLED':'DISABLED'}  Legacy SHA-1 support (MAHLE requires SIGNATURE_ALLOW_LEGACY_SHA1=true in .env)`);
+  for(const [key,label] of Object.entries({node:'Node.js 22/24',dependencies:'Node dependencies and SQLite binary',senders:'Configured sender addresses',credentials:'Gmail OAuth client file',gmailToken:'Gmail connection token',sumatra:'SumatraPDF printing',rejectionDependencies:'Local rejection parser / Windows-Tesseract OCR packages',handwritingDependencies:'Local handwriting Python packages (optional for Gmail/printing)',handwritingModel:'Local TrOCR model files (optional for Gmail/printing)'}))console.log(`  ${status[key]?'OK':'ACTION NEEDED'}  ${label}`);
+  console.log('  Handwriting Python (optional):',status.handwritingPythonVersion);
+  console.log('  Printing: SumatraPDF, without digital signature verification. Python/certificates/Adobe are not required for Gmail or printing.');
   console.log('  Default printer:',status.printer.name,status.printer.physical?'(physical printer selected)':'(select your physical printer in Windows Settings)');
   console.log(status.extractionReady?'\nExtraction prerequisites are ready.':'\nExtraction setup still needs the items marked above.');
-  console.log(status.printingPrerequisitesReady?'Printing prerequisites are ready; each signature must still pass verification.':'Printing prerequisites still need attention; see SETUP.md.');
+  console.log(status.printingPrerequisitesReady?'SumatraPDF printing prerequisites are ready.':'Printing prerequisites still need attention; see SETUP.md.');
   console.log(status.localHandwritingReady?'Local rejection parser and handwriting model prerequisites are ready.':'For local rejection handwriting setup, run Setup Handwriting OCR.cmd or choose it during Setup.cmd.');
   console.log('No Gmail messages were read and no print jobs were sent by these checks.');
-  console.log('Certificate checks are offline. Each original invoice must still pass signature and online revocation validation before printing.');
 }
 function findNpm(projectRoot=root) {
   const candidates=[path.join(path.dirname(process.execPath),'node_modules','npm','bin','npm-cli.js')];
@@ -180,11 +166,11 @@ async function main(args=process.argv.slice(2)) {
     const created=ensureLocalFiles(root);console.log(created.length?'Created: '+created.join(', '):'Existing settings found.');
     const input=(await prompt.question('Enter allowed sender addresses separated by commas, or Enter to keep current settings: ')).trim();
     if(input)updateSenders(root,input);
-    console.log('\nStep 3/7 - Select shared 64-bit Python 3.12 and install the signature verifier.');
-    try {pythonCommand=findPython312(root);setupSignatures(root,{pythonCommand});}catch(e){console.log(e.message);console.log('Extraction can still be set up. Signature checks/printing will stay blocked until this step is completed.');}
+    console.log('\nStep 3/7 - Locate optional 64-bit Python 3.12 for local handwriting OCR. Gmail/printing do not require Python.');
+    try {pythonCommand=findPython312(root);}catch{console.log('Optional handwriting Python was not found. Gmail and SumatraPDF printing can still be used.');}
     console.log('\nStep 4/7 - Local rejection invoices and handwriting model.');
     fs.mkdirSync(path.join(root,'rejections','input'),{recursive:true});
-    console.log('The local handwriting model uses the same selected Python 3.12 version, in a separate environment.');
+    console.log('The local handwriting model uses Python 3.12 in its own environment.');
     const handwriting=(await prompt.question('Install local handwriting OCR on this PC? Model download about 1.3 GB plus packages. [Y/n]: ')).trim().toLowerCase();
     if(!['n','no'].includes(handwriting))try{
       if(!pythonCommand)pythonCommand=findPython312(root);
@@ -198,12 +184,11 @@ async function main(args=process.argv.slice(2)) {
       if(['y','yes'].includes(connect))execute(process.execPath,[npm,'run','auth']);
     }
     console.log('\nStep 6/7 - Printing. Select your attached printer as Windows default.');
-    console.log('For Adobe Reader and its validated signature appearance, run Setup Adobe Printing.cmd, then Test Adobe Printing.cmd.');
     console.log('SumatraPDF: https://www.sumatrapdfreader.org/download-free-pdf-viewer');
     console.log('A virtual PDF printer is not a physical print destination. No test page is sent by setup.');
     console.log('\nStep 7/7 - Final machine checks.');showStatus(collectStatus());
     console.log('\nNext: double-click Run Invoice Extractor.cmd. The first run reads the last 24 hours.');
-    console.log('For signature trust/unsupported-format issues, read SETUP.md.');
+    console.log('Printing uses SumatraPDF without digital signature checks. Old Adobe/verification .env settings are ignored.');
     console.log('For local PDFs: place rejection invoices in rejections/input and double-click Parse Rejection Invoices.cmd.');
   } finally {releaseRejections?.();release?.();prompt.close();}
 }

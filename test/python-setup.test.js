@@ -46,7 +46,7 @@ test('version mismatch is backed up before rebuilding, and an unsupported base c
   assert.equal(fs.readFileSync(path.join(dir,'keep.csv'),'utf8'),'saved invoice data');
   runtime.calls.length=0;assert.equal(ensurePythonEnvironment(dir,name,runtime.base,{run:runtime.run,execute:runtime.exec}).rebuilt,false);assert.equal(runtime.calls.length,0);
 });
-test('read-only checks detect model completeness and exact Python-version alignment without installing anything',t=>{
+test('read-only checks detect model completeness without requiring signature-Python alignment',t=>{
   const dir=fixture(t),runtime=fakeRuntime(dir);
   for(const name of ['.signature-venv','.handwriting-venv'])runtime.exec(runtime.base,['-m','venv',path.join(dir,name)]);
   const model=path.join(dir,'rejections','models','trocr-base-handwritten');fs.mkdirSync(model,{recursive:true});
@@ -57,7 +57,7 @@ test('read-only checks detect model completeness and exact Python-version alignm
   let status=collectStatus(dir,{run,env:{},platform:'win32'});
   assert.equal(status.pythonVersionsMatch,true);assert.equal(status.handwritingModel,true);assert.equal(status.localHandwritingReady,true);
   const executable=path.join(dir,'.handwriting-venv','Scripts','python.exe');runtime.versions.set(executable,[3,12,9]);
-  status=collectStatus(dir,{run,env:{},platform:'win32'});assert.equal(status.pythonVersionsMatch,false);assert.equal(status.localHandwritingReady,false);
+  status=collectStatus(dir,{run,env:{},platform:'win32'});assert.equal(status.pythonVersionsMatch,false);assert.equal(status.localHandwritingReady,true);
   runtime.versions.set(executable,[3,12,10]);fs.unlinkSync(path.join(model,'model.safetensors'));
   status=collectStatus(dir,{run,env:{},platform:'win32'});assert.equal(status.handwritingModel,false);assert.equal(status.localHandwritingReady,false);
   assert.equal(runtime.calls.length,0);

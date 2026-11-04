@@ -9,7 +9,7 @@ const readline=require('node:readline/promises');
   const config=loadConfig(root);
   const choosePrint=!args.includes('--print')&&!args.includes('--no-print')&&(process.stdin.isTTY||args.includes('--choose'))?async count=>{
     const prompt=readline.createInterface({input:process.stdin,output:process.stdout});
-    try {return /^y(?:es)?$/i.test((await prompt.question(`Print the first original page of ${count} unique test invoice(s) through Adobe Reader? [y/N]: `)).trim());}finally{prompt.close();}
+    try {return /^y(?:es)?$/i.test((await prompt.question(`Print the first original page of ${count} unique test invoice(s) through SumatraPDF? [y/N]: `)).trim());}finally{prompt.close();}
   }:undefined;
   const report=await testLatestEmails({api:gmail(),projectRoot:root,config,print:args.includes('--print'),choosePrint});
   if(report.hasIssues){console.log('Test completed with issues. Review test-report.json and failure-report.csv in the displayed folder.');process.exitCode=1;}

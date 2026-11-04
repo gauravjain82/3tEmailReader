@@ -1,4 +1,4 @@
-// Optional local handwriting model; kept separate from the signature verifier.
+// Optional local handwriting model; independent of Gmail extraction and printing.
 const path=require('path');
 const {spawnSync}=require('child_process');
 const {findPython312,ensurePythonEnvironment}=require('./python-runtime');
@@ -11,7 +11,7 @@ function execute(command,args,projectRoot=root){
 function setupHandwriting(projectRoot=root,{pythonCommand=findPython312(projectRoot),run,exec=execute}={}){
   const environment=ensurePythonEnvironment(projectRoot,'.handwriting-venv',pythonCommand,{run,execute:exec});
   const executable=environment.executable;
-  console.log('Handwriting Python:',environment.version,'64-bit (same selected runtime as the signature verifier)');
+  console.log('Handwriting Python:',environment.version,'64-bit (local handwriting OCR only)');
   exec(executable,['-m','pip','install','--upgrade','pip'],projectRoot);
   exec(executable,['-m','pip','install','--only-binary=:all:','--index-url','https://download.pytorch.org/whl/cpu','torch==2.9.1'],projectRoot);
   exec(executable,['-m','pip','install','--only-binary=:all:','-r','requirements-handwriting.txt'],projectRoot);

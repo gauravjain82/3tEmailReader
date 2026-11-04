@@ -41,15 +41,3 @@ test('setup reads explicit legacy policy from local env without changing it',t=>
   assert.equal(fs.readFileSync(envFile,'utf8'),'SIGNATURE_ALLOW_LEGACY_SHA1=true\n');
   assert.equal(fs.existsSync(path.join(dir,'data')),false);
 });
-
-test('Adobe setup checks probe the selected engine without requiring Sumatra or opening Reader',t=>{
-  const dir=fixture(t);const calls=[];
-  const status=collectStatus(dir,{env:{PRINT_ENGINE:'adobe'},platform:'win32',run:(command,args)=>{
-    calls.push(args);
-    if(command==='powershell.exe'&&args.includes('-Check'))return {ok:true,text:JSON.stringify({ready:true,executable:'C:\\Adobe\\Acrobat.exe',printer:'Physical printer'})};
-    return {ok:false,text:''};
-  }});
-  assert.equal(status.printEngine,'adobe');assert.equal(status.adobe.ready,true);assert.equal(status.sumatra,false);
-  assert.ok(calls.every(args=>!args.includes('-JobPath')));
-  assert.equal(fs.existsSync(path.join(dir,'data')),false);
-});
