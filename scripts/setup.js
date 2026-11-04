@@ -7,6 +7,7 @@ const {acquireRunLock}=require('../src/services/runLock');
 const {findPython312,inspectPython,supportedRuntime,ensurePythonEnvironment}=require('./python-runtime');
 const {setupHandwriting}=require('./setup-handwriting');
 const handwritingModel=require('./handwriting-model.json');
+const {checkCertificates}=require('./check-certificates');
 const root=path.resolve(__dirname,'..');
 
 function probe(command,args,projectRoot=root) {
@@ -24,7 +25,7 @@ function settings(projectRoot,env) {
   const result={...env};
   const file=path.join(projectRoot,'.env');
   if(fs.existsSync(file))for(const line of fs.readFileSync(file,'utf8').split(/\r?\n/)) {
-    const m=line.match(/^\s*(SUMATRA_PDF|SIGNATURE_PYTHON|SIGNATURE_TRUST_DIR)\s*=\s*(.*?)\s*$/);
+    const m=line.match(/^\s*(SUMATRA_PDF|SIGNATURE_PYTHON|SIGNATURE_TRUST_DIR|SIGNATURE_ALLOW_LEGACY_SHA1)\s*=\s*(.*?)\s*$/);
     if(m && !result[m[1]])result[m[1]]=m[2].replace(/^(['"])(.*)\1$/,'$2');
   }
   return result;
@@ -52,6 +53,8 @@ function updateSenders(projectRoot,input) {
 }
 function collectStatus(projectRoot=root,{run=probe,env=process.env,version=process.version,platform=process.platform}={}) {
   const configured=settings(projectRoot,env);
+  const certificateCheck=checkCertificates(projectRoot,{trustDir:configured.SIGNATURE_TRUST_DIR||path.join(projectRoot,'certificates','trusted-roots')});
+  const legacyAdapter=['verify_pdf_signature.py','legacy_pdf_signature.py'].every(file=>fs.existsSync(path.join(projectRoot,'scripts',file)));
   const credentials=readJson(path.join(projectRoot,'credentials.json'));const client=credentials?.installed || credentials?.web;
   const token=readJson(path.join(projectRoot,'token.json'));
   const senderConfig=readJson(path.join(projectRoot,'config.json'));
@@ -79,7 +82,11 @@ function collectStatus(projectRoot=root,{run=probe,env=process.env,version=proce
   }
   const status={node:supportedNode(version),nodeVersion:version,dependencies,senders,credentials:!!(client?.client_id && client?.client_secret),gmailToken:!!(token?.refresh_token || token?.access_token && (!token.expiry_date || token.expiry_date>Date.now())),python:supportedRuntime(pythonInfo),pythonVersion:pythonInfo?.version?.join('.')||'Not found',signaturePythonVersion:signaturePython?.version?.join('.')||'Not installed',handwritingPythonVersion:handwritingPython?.version?.join('.')||'Not installed',pythonVersionsMatch:!!pythonVersionsMatch,signatureVerifier:!!signatureVerifier,rejectionDependencies,handwritingDependencies:!!handwritingDependencies,handwritingModel:!!handwritingModelReady,sumatra,printer};
   status.extractionReady=status.node && status.dependencies && status.senders && status.credentials && status.gmailToken;
-  status.printingPrerequisitesReady=status.extractionReady && status.signatureVerifier && status.sumatra && status.printer.physical;
+  status.certificateCheck=certificateCheck;
+  status.certificates=certificateCheck.ready;
+  status.legacyAdapter=legacyAdapter;
+  status.legacySha1Enabled=configured.SIGNATURE_ALLOW_LEGACY_SHA1==='true';
+  status.printingPrerequisitesReady=status.extractionReady && status.signatureVerifier && status.certificates && status.legacyAdapter && status.sumatra && status.printer.physical;
   status.localRejectionReady=status.node&&status.rejectionDependencies;
   status.localHandwritingReady=status.localRejectionReady&&status.handwritingDependencies&&status.handwritingModel&&(!signaturePython||status.pythonVersionsMatch);
   return status;
@@ -88,11 +95,17 @@ function showStatus(status) {
   console.log('\nMachine setup checks:');
   for(const [key,label] of Object.entries({node:'Node.js 22/24',dependencies:'Node dependencies and SQLite binary',senders:'Configured sender addresses',credentials:'Gmail OAuth client file',gmailToken:'Gmail connection token',python:'Python 3.12, 64-bit',signatureVerifier:'Signature verifier',sumatra:'SumatraPDF',rejectionDependencies:'Local rejection parser / Windows-Tesseract OCR packages',handwritingDependencies:'Local handwriting Python packages (optional for Gmail)',handwritingModel:'Local TrOCR model files (optional for Gmail)',pythonVersionsMatch:'Signature and handwriting Python versions match'}))console.log(`  ${status[key]?'OK':'ACTION NEEDED'}  ${label}`);
   console.log('  Signature Python:',status.signaturePythonVersion,'| Handwriting Python:',status.handwritingPythonVersion);
+  console.log(`  ${status.certificates?'OK':'ACTION NEEDED'}  Bundled CA fingerprints, validity and chains (${status.certificateCheck.count}/7)`);
+  for(const issue of status.certificateCheck.issues)console.log('    '+issue);
+  console.log('  Active certificate folder:',status.certificateCheck.trustDir);
+  console.log(`  ${status.legacyAdapter?'OK':'ACTION NEEDED'}  Legacy PDF signature adapter files`);
+  console.log(`  ${status.legacySha1Enabled?'ENABLED':'DISABLED'}  Legacy SHA-1 support (MAHLE requires SIGNATURE_ALLOW_LEGACY_SHA1=true in .env)`);
   console.log('  Default printer:',status.printer.name,status.printer.physical?'(physical printer selected)':'(select your physical printer in Windows Settings)');
   console.log(status.extractionReady?'\nExtraction prerequisites are ready.':'\nExtraction setup still needs the items marked above.');
   console.log(status.printingPrerequisitesReady?'Printing prerequisites are ready; each signature must still pass verification.':'Printing prerequisites still need attention; see SETUP.md.');
   console.log(status.localHandwritingReady?'Local rejection parser and handwriting model prerequisites are ready.':'For local rejection handwriting setup, run Setup Handwriting OCR.cmd or choose it during Setup.cmd.');
   console.log('No Gmail messages were read and no print jobs were sent by these checks.');
+  console.log('Certificate checks are offline. Each original invoice must still pass signature and online revocation validation before printing.');
 }
 function findNpm(projectRoot=root) {
   const candidates=[path.join(path.dirname(process.execPath),'node_modules','npm','bin','npm-cli.js')];

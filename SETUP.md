@@ -106,6 +106,8 @@ Open the printed authorization URL in a browser on the same PC and sign in to th
 
 ## 7. Understand signature checks
 
+Run `npm run setup:check` to repeat the read-only machine checks. They verify all seven bundled CA files against the approved SHA-256 manifest, CA status, current validity dates and issuing chains. They also check the configured trust folder, legacy adapter files and whether `SIGNATURE_ALLOW_LEGACY_SHA1=true` is enabled. Missing/changed/expired certificates show ACTION NEEDED. These offline checks do not establish an individual invoice's signature or revocation status; that happens automatically before printing with internet access.
+
 If signature setup used an incompatible Python version (for example 3.15), install **Python 3.12 64-bit**, close the extractor, and double-click **Repair Signature Setup.cmd**. It finds Python 3.12 in standard installation locations or via the Python launcher/PATH, backs up the existing `.signature-venv` under `data/backups/`, and recreates the verifier using Python 3.12. Internet access is required. If Python 3.12 is missing, it provides the official download link without moving the old environment. Invoice data and Gmail settings are retained. A custom `SIGNATURE_PYTHON` override must point to the repaired interpreter (or be removed to use the default).
 
 Windows trusted roots are read automatically. If an issuer is not trusted, ask IT for its independently verified **public CA/root certificate** and place it in `certificates/trusted-roots/`. Do not add an invoice's signing certificate merely to make its warning disappear. Setup does not import certificates into Windows.
