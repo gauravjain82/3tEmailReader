@@ -27,6 +27,23 @@ test('signature helper accepts only complete verified results for the unchanged 
   assert.equal(report.status,'VALID');assert.equal(options[2].windowsHide,true);assert.equal(options[2].shell,undefined);
   assert.ok(options[1].includes(path.resolve(file)));
 });
+
+test('legacy SHA-1 is forwarded only for explicit opt-in and still blocks untrusted signatures',async t=>{
+  const {file,hash,dir,store,item}=fixture(t);
+  for(const enabled of [false,true,'true']) {
+    let args;
+    const report=await verifyPdfSignature(file,hash,{python:process.execPath,allowLegacySha1:enabled,run:async(_command,argv)=>{
+      args=argv;return {stdout:JSON.stringify({schemaVersion:1,status:'UNKNOWN',reason:'Missing trusted issuer',signatures:[]})};
+    }});
+    assert.equal(args.includes('--allow-legacy-sha1'),enabled===true);
+    assert.equal(report.status,'UNKNOWN');
+  }
+  await printOriginalInvoices(store,[item],{platform:'win32',findExecutable:()=>assert.fail('Untrusted signature must not print'),verifySignature:async()=>({schemaVersion:1,status:'UNKNOWN',reason:'Missing trusted issuer',signatures:[],legacySha1Allowed:true})});
+  store.exportAll();
+  const details=JSON.parse(fs.readFileSync(path.join(dir,'signature-details.json'),'utf8'));
+  assert.equal(details[0].legacySha1Allowed,true);
+  assert.equal(details[0].status,'UNKNOWN');
+});
 test('missing helper, changed source, malformed output and incomplete approval all block verification',async t=>{
   const {file,hash,dir}=fixture(t);
   assert.equal((await verifyPdfSignature(file,'wrong')).status,'INVALID');
@@ -58,5 +75,5 @@ test('real offline cryptographic tests validate, tamper, trust, revocation and u
   const python=process.env.SIGNATURE_PYTHON || path.resolve('.signature-venv',process.platform==='win32'?'Scripts/python.exe':'bin/python');
   if(!fs.existsSync(python))return t.skip('Run Setup Signature Verification.cmd to install the cryptographic test dependency');
   const result=spawnSync(python,['test/signature_crypto_checks.py'],{encoding:'utf8',windowsHide:true,timeout:60000});
-  assert.equal(result.status,0,result.stderr || result.error?.message);assert.match(result.stderr,/Ran 6 tests/);
+  assert.equal(result.status,0,result.stderr || result.error?.message);assert.match(result.stderr,/Ran 12 tests/);
 });

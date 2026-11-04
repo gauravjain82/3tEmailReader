@@ -4,6 +4,8 @@ Runs once when you double-click `Run Invoice Extractor.cmd`: reads new Gmail PDF
 
 **New PC:** follow [SETUP.md](SETUP.md), then double-click **Setup.cmd** for guided installation/configuration and machine checks. Existing settings and invoice data are retained. To check readiness without installing anything, run `npm run setup:check`.
 
+**Local rejection invoices:** double-click **Parse Rejection Invoices.cmd** to parse PDFs placed in `rejections/input` and create a separate CSV retaining the 14 MF02 template columns. Windows OCR and Tesseract compare every PDF field; differences are listed in `discrepancy-report.csv`. See [REJECTIONS.md](REJECTIONS.md) for field meanings, review and output locations. This workflow runs independently of Gmail.
+
 ## Prerequisites
 - Node.js 22.x or 24.x and npm. SQLite is pinned to `better-sqlite3` 12.11.1, which supports both versions. Node 24 does not require downgrading for this project.
 - A Google Cloud project with **Gmail API enabled**
@@ -79,7 +81,7 @@ Printing uses [SumatraPDF's documented default-printer command](https://www.suma
 
 ## Automatic signature verification before printing
 
-Run **Setup Signature Verification.cmd** once on each PC (Python 3.10 or newer must be installed and available as `python`). It installs the free, pinned `pyHanko` dependency into the project's `.signature-venv` folder. SumatraPDF remains the printer renderer; pyHanko performs the separate cryptographic check. No paid services are used.
+Run **Setup.cmd** or **Setup Signature Verification.cmd** once on each PC with **64-bit Python 3.12** installed (tested version: 3.12.10). The shared selector supports standard installation paths and Python Install Manager, so a different `python` on PATH is not selected accidentally. It installs pinned `pyHanko` into `.signature-venv`. Main setup also offers the local rejection handwriting model, using the exact same selected Python patch version in `.handwriting-venv`. SumatraPDF remains the printer renderer; pyHanko performs the separate cryptographic check. No paid services are used.
 
 When Print is selected, the app verifies the complete unchanged source attachment, its download SHA-256, embedded signature integrity, signer certificate chain, revocation information and final-document coverage. Only `VALID` results can reach the printer. Invalid, unknown, unsigned, unsupported, timed-out or unavailable checks block printing and are reported. No print job is reserved for a signature rejection, so it can be retried after the trust/setup issue is resolved. Invoice extraction's `VALIDATED` status is independent of signature validity.
 

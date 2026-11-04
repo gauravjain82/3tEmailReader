@@ -157,6 +157,7 @@ function openStore(dataDir) {
     atomicWrite(path.join(dataDir,'failure-report.csv'),[failureColumns.join(','),...failures.map(r=>failureColumns.map(c=>csvCell(r[c])).join(','))].join('\r\n')+'\r\n');
     const signatureColumns=['invoice_number','filename','status','reason','checked_at','source_pdf_path','source_sha256'];
     atomicWrite(path.join(dataDir,'signature-report.csv'),[signatureColumns.join(','),...checks.map(r=>signatureColumns.map(c=>csvCell(r[c])).join(','))].join('\r\n')+'\r\n');
+    atomicWrite(path.join(dataDir,'signature-details.json'),JSON.stringify(checks.map(r=>({invoice_number:r.invoice_number,filename:r.filename,...JSON.parse(r.result_json)})),null,2));
   }
   return { db, find, save, markAttachment, exportAll, close: () => db.close() };
 }

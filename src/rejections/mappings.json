@@ -1,0 +1,14 @@
+{
+  "parts": {
+    "12221M81R10-300": "F01948FG0000",
+    "12221M72R00-300": "F01906FG0000",
+    "12221M68PC0-300": "F01904FG0000",
+    "12221M78431-300": "F01013FG0000",
+    "12221M79G00-300": "F01474FG0000",
+    "12221M86J00-300": "F91637FG0000"
+  },
+  "plants": {
+    "GURGAON": { "location": "Gurgaon(MF02)", "customerCode": "MFCM0MF02" },
+    "MANESAR": { "location": "Manesar(MF03)", "customerCode": "MFCM0MF03" }
+  }
+}

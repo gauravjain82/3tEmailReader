@@ -6,7 +6,7 @@ Follow these steps once on each machine. VS Code is optional. Setup does not cle
 
 Download the code from [3tEmailReader on GitHub](https://github.com/gauravjain82/3tEmailReader) using **Code > Download ZIP**, then extract it into a permanent local folder. If using Git, run `git pull` in your existing checkout.
 
-Use a separate local installation on each PC. Do not copy `node_modules`, `.signature-venv`, or another machine's `token.json`. Each PC has its own results, checkpoints and print history, so the same invoice can be processed independently on different PCs.
+Use a separate local installation on each PC. Do not copy `node_modules`, `.signature-venv`, `.handwriting-venv`, or another machine's `token.json`. Each PC has its own results, checkpoints and print history, so the same invoice can be processed independently on different PCs.
 
 ## 2. Install Node.js 22 or 24
 
@@ -21,21 +21,34 @@ npm --version
 
 Node should report `v22...` or `v24...`. This project pins `better-sqlite3` 12.11.1 to support both. Visual Studio Build Tools are normally unnecessary when the matching prebuilt SQLite binary can be downloaded.
 
-## 3. Install Python for signature verification
+## 3. Install one 64-bit Python 3.12 for both features
 
-In PowerShell or Command Prompt:
+The tested version is **Python 3.12.10 (64-bit)**. Download the **Windows installer (64-bit)** from [the official Python 3.12.10 release](https://www.python.org/downloads/release/python-31210/), select **Add python.exe to PATH**, and use its default installation location. Avoid the latest-version download button, which may install a different Python series.
+
+If **Python Install Manager** is already installed, install the actual 3.12 runtime (the manager alone is not Python):
+
+```powershell
+py install 3.12
+py -3.12 --version
+```
+
+Alternatively, in PowerShell or Command Prompt:
 
 ```powershell
 winget install --id Python.Python.3.12 --exact --source winget
 ```
 
-Alternatively use the [official Python Windows installer](https://www.python.org/downloads/windows/) and select **Add Python to PATH**. Reopen the terminal and check:
+Close and reopen the terminal after installation. If using the standalone installer, check:
 
 ```powershell
 python --version
 ```
 
-Python 3.12 is recommended; 3.10 or newer is required. Python is needed for signature verification before printing. CSV extraction itself uses Node.js.
+Both the Gmail signature verifier and rejection handwriting model use **64-bit Python 3.12**, selected by the same helper. Setup passes the same interpreter to both installers and checks the full major/minor/patch version. Existing environments with a different version are backed up under `data/backups/` and recreated. A different `python` command on PATH does not need to be uninstalled: setup also finds 3.12 via `py -3.12` and standard installation paths.
+
+The environments remain separate: `.signature-venv` for pyHanko/PyYAML and `.handwriting-venv` for CPU PyTorch/Transformers/Pillow. They use the same selected Python version without sharing package installations. Python 3.10, 3.15, or a 32-bit runtime is not selected by these installers. If a custom `SIGNATURE_PYTHON` is set in `.env`, remove it to use the managed environment or ensure it uses the same 64-bit 3.12 patch version.
+
+Gmail CSV extraction itself uses Node.js; Python is required for signature verification before printing and for the optional local handwriting model.
 
 ## 4. Install SumatraPDF and set the printer
 
@@ -51,14 +64,17 @@ Select your physical printer, such as Canon E470 series, rather than Export to W
 
 ## 5. Run Setup.cmd
 
-Close any active extractor window, then double-click **Setup.cmd** in the project folder. Choose **1 — Install/configure this machine**. It walks through six steps:
+Close any active extractor, rejection-parser or setup window, then double-click **Setup.cmd** in the project folder. Choose **1 - Install/configure this machine**. It walks through seven steps:
 
 1. Install the locked Node dependencies with `npm ci`.
 2. Create missing local settings and ask for allowed sender addresses.
-3. Create a local Python environment and install the signature verifier.
-4. Check the Gmail credentials and optionally connect your account.
-5. Explain the default-printer setup.
-6. Show which prerequisites are ready and which need attention.
+3. Select the shared 64-bit Python 3.12 runtime and install the signature verifier.
+4. Create `rejections/input` and offer to install the local handwriting model (**Yes by default**). It uses the same selected Python patch version in its own environment.
+5. Check the Gmail credentials and optionally connect your account.
+6. Explain the default-printer setup.
+7. Show readiness for Gmail, printing, local rejection parsing, handwriting packages/model files, and Python-version alignment.
+
+The handwriting step downloads approximately **1.3 GB for the pinned Microsoft TrOCR model**, plus CPU-only PyTorch and other packages. Allow disk space and time for the first installation. Model files are cached under `rejections/models/trocr-base-handwritten`; setup can be rerun without deliberately downloading a fresh copy. Later handwriting inference runs offline and does not upload invoice images. No GPU, Azure account, API key, or per-page OCR fee is needed. Choose No if this PC needs Gmail only; handwriting is optional for that workflow.
 
 Enter sender addresses separated by commas. They are the **From addresses to accept**, not necessarily the mailbox you log in to. Existing `.env` and `config.json` are preserved unless you explicitly enter replacement senders; the previous sender configuration is backed up before replacement.
 
@@ -70,7 +86,9 @@ For a read-only status check, choose option 2 in Setup.cmd, or run:
 node scripts/setup.js --check
 ```
 
-To install/retry only the Python verifier, double-click **Setup Signature Verification.cmd**. Internet access is needed to install packages. Setup does not automatically install Node, Python, SumatraPDF or printer drivers.
+To install/retry only the Python verifier, double-click **Setup Signature Verification.cmd**. To install/retry only the local handwriting dependencies and model, use **Setup Handwriting OCR.cmd**. Both use the shared Python 3.12 selector and back up mismatched environments. Internet access is needed for package/model installation. Setup does not automatically install system-wide Node, Python, SumatraPDF or printer drivers.
+
+In the final checks, confirm both Python versions are identical, the signature verifier is OK, and (for rejection handwriting) the OCR packages and model files are OK. The check is read-only and does not download models, perform inference, read Gmail messages, or print. A complete model cache is checked against the pinned model ID/revision and required file list.
 
 ## 6. Connect Gmail on this PC
 
@@ -91,6 +109,28 @@ Open the printed authorization URL in a browser on the same PC and sign in to th
 If signature setup used an incompatible Python version (for example 3.15), install **Python 3.12 64-bit**, close the extractor, and double-click **Repair Signature Setup.cmd**. It finds Python 3.12 in standard installation locations or via the Python launcher/PATH, backs up the existing `.signature-venv` under `data/backups/`, and recreates the verifier using Python 3.12. Internet access is required. If Python 3.12 is missing, it provides the official download link without moving the old environment. Invoice data and Gmail settings are retained. A custom `SIGNATURE_PYTHON` override must point to the repaired interpreter (or be removed to use the default).
 
 Windows trusted roots are read automatically. If an issuer is not trusted, ask IT for its independently verified **public CA/root certificate** and place it in `certificates/trusted-roots/`. Do not add an invoice's signing certificate merely to make its warning disappear. Setup does not import certificates into Windows.
+
+The tested PantaSign/Verasys chains use **CCA India 2022** as root, with **PantaSign CA 2022 / PantaSign Sub CA for DSC 2022** or **Verasys CA 2022 / Verasys Sub CA 2022** as intermediates. Only the root goes in `trusted-roots`; the four intermediate files go in `certificates/intermediates`. On another PC, copy the independently verified public CA files into those application folders. Local certificates and `.env` are excluded from Git, so pulling the code alone does not activate these trust settings or enable legacy SHA-1 compatibility. Signature, integrity, revocation and complete-file checks remain required.
+
+### Existing SHA-1 invoices that Acrobat verifies
+
+The verifier blocks SHA-1 by default. To accept existing SHA-1 invoices under an explicitly relaxed algorithm policy, add this line to your local `.env`, then restart the extractor or **Original Invoices.cmd**:
+
+```dotenv
+SIGNATURE_ALLOW_LEGACY_SHA1=true
+```
+
+This changes the algorithm policy for this application's signature checks (including certificate chains); MD2/MD5 and the existing key-size limits remain blocked. It does not skip certificate trust, required revocation information, integrity, or complete-file coverage. Reports record `legacySha1Allowed` and a warning when the option is enabled. Remove the line or set it to `false` to restore the default. This does not claim to duplicate Acrobat's validation policy or change the signature appearance in SumatraPDF.
+
+If the remaining error is **no path to a trusted root**, obtain the correct issuer chain:
+
+1. In Acrobat open the original PDF, open the **Signatures** panel, and select **Signature Properties > Show Signer's Certificate**. Review the chain shown by Acrobat. See [Adobe's validation instructions](https://helpx.adobe.com/acrobat/desktop/e-sign-documents/manage-digital-signatures/validate-digital-sign.html).
+2. Obtain the matching public root CA certificate from the issuer's official website or your IT administrator, and verify its SHA-256 fingerprint against an independent trusted source. For Indian CCA roots, the [official CCA root-certificate page](https://cca.gov.in/root_certificate.html) publishes them. Do not choose a root simply because its name looks similar.
+3. Place the verified root certificate (`.cer`, `.crt`, `.pem`, or `.der`) in `certificates/trusted-roots/`. Place any missing intermediate CA certificates in `certificates/intermediates/` (create that folder if needed). Intermediates help build the chain and are not treated as trust anchors. With a custom `SIGNATURE_TRUST_DIR`, the `intermediates` folder is a sibling of the configured root folder.
+4. Keep internet access available for the issuer's OCSP/CRL services. Retry **Original Invoices.cmd > Print originals** for the last batch; this verifies the original again before submitting it to the printer. A previous successful/uncertain print submission is still protected against repeat printing.
+5. Read `data/signature-report.csv` for the result and `data/signature-details.json` for the full per-signature diagnostics and policy warning. If verification remains `UNKNOWN`, no print job is submitted for that invoice.
+
+No sender signing key, password, `.pfx`, or `.p12` file is needed. A root certificate must represent a CA that your organisation trusts; a successful integrity check alone is not issuer authentication.
 
 Only signatures verified as `VALID` can be printed automatically. Invalid, unknown, unsigned, unsupported or unavailable checks are reported and blocked. The supplied MAHLE `/adbe.pkcs7.sha1` format is unsupported by the verifier and stays `UNKNOWN`; adding a trusted CA alone does not fix this format limitation. The visual question mark is not replaced with a green tick.
 
@@ -115,6 +155,16 @@ Open `data/invoices.csv` in Excel. It contains `invoice_number`, `invoice_date`,
 
 **Original Invoices.cmd** offers saving/printing from the last completed batch without reading Gmail again. Close CSV files in Excel before running exports or clearing results.
 
+## 9. Run local rejection PDFs and handwriting
+
+1. During **Setup.cmd**, choose Yes for handwriting in step 4. If it was skipped, double-click **Setup Handwriting OCR.cmd** later.
+2. Run `node scripts/setup.js --check`. For a full installation, both Python versions should show the same value (tested: **3.12.10**), with OK for signature verification, rejection/OCR packages, handwriting packages, model files and version alignment. Gmail credentials are not required for the local rejection workflow.
+3. Put rejection PDFs in **rejections/input** and double-click **Parse Rejection Invoices.cmd**.
+4. Open the latest folder under **rejections/output**, then **rejections.csv**. The 14-column format is retained. Item and supplier-city values come from the PDF; part/plant/customer codes use your mappings in **src/rejections/mappings.json**. Unknown part names remain empty.
+5. Read **review-report.csv** and **discrepancy-report.csv** for unresolved readings. The local model reads only Ack No and Ack Date, and attempts to fill consistent valid candidates. Handwriting disagreements, invalid dates, and model-derived values remain traceable in the reports.
+
+Use **Test Handwriting OCR.cmd** to test just the two handwritten fields on one PDF. It creates diagnostic crops/results under **rejections/handwriting-tests** without changing Gmail data or an existing invoice CSV. See [REJECTIONS.md](REJECTIONS.md) for mappings, all output files and OCR limitations.
+
 ## Troubleshooting
 
 | Problem | Action |
@@ -125,6 +175,8 @@ Open `data/invoices.csv` in Excel. It contains `invoice_number`, `invoice_date`,
 | Google authorization fails | Check the Desktop client, enabled Gmail API and test-user configuration; run `npm run auth` again. Port 3000 must be available for the local OAuth callback. |
 | SumatraPDF not detected | Use its standard installer, or set `SUMATRA_PDF` to the full executable path in `.env`. |
 | Signature verifier not found | Run Setup Signature Verification.cmd. For a custom environment, set `SIGNATURE_PYTHON` to its Python executable in `.env`. |
+| Python versions do not match | Run Setup.cmd option 1 with 64-bit Python 3.12 installed, and choose Yes for handwriting. Both environments are created from the same selected interpreter; mismatched versions are backed up first. Remove an obsolete `SIGNATURE_PYTHON` override if it points elsewhere. |
+| Handwriting packages/model need action | Run Setup Handwriting OCR.cmd with internet access. A failed/partial model download can be retried. Read-only checks do not download it. Gmail extraction can still run without this optional model. |
 | PyYAML build/config error | Updated setup upgrades pip, repairs PyYAML using its pinned 6.0.3 wheel, and requires prebuilt wheels for signature dependencies. Use standard 64-bit Python 3.12. Check the displayed **Verifier Python** version: an existing `.signature-venv` can still use an older/different interpreter after system Python changes. If pip says no matching distribution, capture the complete error and check Python architecture and package-index access; source compilation is not attempted. |
 | `SIGNATURE_UNKNOWN` or `SIGNATURE_UNSIGNED` | Read `signature-report.csv` and the verification details. IT may need to supply a trusted root or resolve revocation access; unsupported signature formats require manual review. |
 | CSV locked / `EBUSY` / `EPERM` | Close Excel or the application holding the file and retry. |

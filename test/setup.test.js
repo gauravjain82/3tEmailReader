@@ -42,7 +42,25 @@ test('signature repair preserves old environment and data, and does not move any
 test('setup accepts supported runtimes and identifies unsupported/missing versions',()=>{
   for(const v of ['v22.16.0','v24.22.1'])assert.equal(supportedNode(v),true);
   for(const v of ['v20.19.0','v22.0.0','v26.0.0','missing'])assert.equal(supportedNode(v),false);
-  assert.equal(supportedPython('Python 3.12.10'),true);assert.equal(supportedPython('Python 3.9.0'),false);
+  assert.equal(supportedPython('Python 3.12.10'),true);for(const value of ['Python 3.9.0','Python 3.10.0','Python 3.15.2'])assert.equal(supportedPython(value),false);
+});
+
+test('Python diagnostics detect the repaired verifier or launcher even when python is absent from PATH',t=>{
+  const dir=fixture(t);
+  const executable=path.join(dir,'.signature-venv','Scripts','python.exe');
+  const calls=[];
+  const run=(command,args)=>{
+    calls.push(command);
+    if(command===executable||command==='py')return {ok:true,text:args.some(a=>a.includes('sys.version_info'))?JSON.stringify({executable,version:[3,12,10],bits:64}):''};
+    return {ok:false,text:''};
+  };
+  assert.equal(collectStatus(dir,{run,env:{},platform:'win32'}).python,true);
+  assert.ok(calls.includes('py'));
+  fs.mkdirSync(path.dirname(executable),{recursive:true});fs.writeFileSync(executable,'test placeholder');calls.length=0;
+  const status=collectStatus(dir,{run,env:{},platform:'win32'});
+  assert.equal(status.python,true);assert.equal(status.signatureVerifier,true);
+  assert.ok(!calls.includes('python'));assert.ok(!calls.includes('py'));
+  assert.equal(fs.existsSync(path.join(dir,'data')),false);
 });
 test('new local settings contain no active example senders and subsequent setup preserves private files',t=>{
   const dir=fixture(t);assert.deepEqual(ensureLocalFiles(dir),['.env','config.json']);
