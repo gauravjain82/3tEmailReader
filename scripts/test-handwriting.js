@@ -7,6 +7,7 @@ const {acquireRunLock}=require('../src/services/runLock');
 const root=path.resolve(__dirname,'..');
 function lineRegions(page){
   const anchor=page.items.filter(i=>i.x>.06&&i.x<.45&&i.y>.07&&i.y<.18&&i.w>.08&&(i.text.match(/[\dOoIl|]/g)||[]).length>=8).sort((a,b)=>b.w-a.w)[0];
+  if(!anchor&&page.textSource==='scanned-page-ocr')return {number:{left:.12,right:.415,top:.075,bottom:.14},date:{left:.12,right:.415,top:.14,bottom:.19}};
   if(!anchor)throw Error(`Page ${page.page}: handwritten number location could not be established from this template.`);
   const left=Math.max(.04,anchor.x-.06),right=Math.min(.42,anchor.x+anchor.w+.04);
   return {number:{left,right,top:Math.max(.035,anchor.y-.055),bottom:anchor.y+.006},date:{left,right,top:anchor.y+.008,bottom:Math.min(.21,anchor.y+.06)}};
@@ -44,7 +45,7 @@ function writeReview(output,raw,file,pageErrors=[]){
   fs.writeFileSync(path.join(output,'handwriting-test.csv'),'\uFEFF'+[columns.join(','),...results.map(r=>[r.page,r.invoice,r.field,r.status,r.candidate,r.readings[0].text,r.readings[1].text].map(cell).join(','))].join('\r\n')+'\r\n');
   return results;
 }
-async function main(args=process.argv.slice(2),{lock=true,outputRoot,setExitCode=true}={}){
+async function main(args=process.argv.slice(2),{lock=true,outputRoot,setExitCode=true,pages:providedPages}={}){
   let input;
   if(args.length===1&&args[0]==='--choose'){
     const prompt=require('node:readline/promises').createInterface({input:process.stdin,output:process.stdout});
@@ -61,7 +62,7 @@ async function main(args=process.argv.slice(2),{lock=true,outputRoot,setExitCode
   const output=path.join(outputRoot||path.join(root,'rejections','handwriting-tests'),new Date().toISOString().replace(/[:.]/g,'-'));
   fs.mkdirSync(output,{recursive:true});
   const {createCanvas,loadImage}=require('@napi-rs/canvas');
-  const pages=await readPages(file),images=[],pageErrors=[];
+  const pages=providedPages||await readPages(file),images=[],pageErrors=[];
   const parser=new PDFParse({data:new Uint8Array(fs.readFileSync(file))});
   try{
     for(const page of pages){

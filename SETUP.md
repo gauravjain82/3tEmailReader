@@ -2,6 +2,73 @@
 
 Follow these steps once on each machine. VS Code is optional. Setup does not clear invoice data, change the default printer, or print a test page.
 
+## Optional Gemini on Vertex AI for rejection invoices
+
+This option uses your existing Google Cloud project and billing. It is separate from Gmail OAuth: enabling the API or connecting Gmail does not install Vertex credentials on each PC. No Python or extra npm package is required for Gemini mode. Invoice pages are sent to Google Cloud and usage is billable. The existing local rejection command stays available and remains the default.
+
+1. Enable the Vertex AI API in the chosen project, with billing active. The identity used by this PC needs appropriate access, normally Vertex AI User (`roles/aiplatform.user`).
+2. In the project's local `.env`, select the model ID available in your project/location. This example uses the documented preview Flash model; set a different supported model explicitly when required:
+
+   ```dotenv
+   REJECTION_GEMINI_MODEL=gemini-3-flash-preview
+   GOOGLE_CLOUD_LOCATION=global
+   ```
+
+   The app explicitly requests high-resolution PDF reading by default, which uses more media tokens than the provider default. Missing, uncertain or unmapped part numbers trigger one additional Gemini request for enlarged table/Material crops, with separate audit evidence. This needs no extra Python or model installation. Unresolved comparisons remain blank for review; see REJECTIONS.md.
+
+3. Choose one authentication method:
+
+   **Application Default Credentials (ADC):** install the Google Cloud CLI if needed, then run the following interactively on this PC:
+
+   ```powershell
+   gcloud auth application-default login
+   gcloud auth application-default set-quota-project YOUR_PROJECT_ID
+   ```
+
+   Finish browser sign-in and grant the **Google Cloud / Cloud Platform** permission on the consent screen. A browser login without that permission does not create usable application credentials. If the command reports that `cloud-platform` was not consented, retry with `gcloud auth application-default login --scopes=https://www.googleapis.com/auth/cloud-platform` and approve that permission. A successful command reports that credentials were saved to `application_default_credentials.json`.
+
+   If `gcloud` is not recognized, install the [official Windows Google Cloud CLI](https://dl.google.com/dl/cloudsdk/channels/rapid/GoogleCloudSDKInstaller.exe), keep bundled Python/PATH options enabled, and reopen PowerShell. For the standard installation, you can also run it with `& "C:\Program Files (x86)\Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd"` followed by the command arguments above. This CLI Python is separate from the optional handwriting environment.
+
+   Add these local `.env` settings:
+
+   ```dotenv
+   VERTEX_AUTH_MODE=adc
+   GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID
+   ```
+
+   If your administrator already provided a service-account JSON file, use its existing private local location instead of the interactive login:
+
+   ```dotenv
+   VERTEX_AUTH_MODE=adc
+   GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID
+   GOOGLE_APPLICATION_CREDENTIALS=C:/private/vertex-service-account.json
+   ```
+
+   Keep that file outside the repository. Do not use the Gmail `credentials.json` OAuth-client file here.
+
+   **Vertex-compatible Google Cloud API key:** add the key only to the local, Git-ignored `.env`:
+
+   ```dotenv
+   VERTEX_AUTH_MODE=api-key
+   VERTEX_API_KEY=YOUR_VERTEX_COMPATIBLE_KEY
+   ```
+
+   The API-key route uses Google's publisher endpoint and the project associated with that key. A Gmail OAuth client ID/client secret is not a Vertex API key. If both authentication methods are configured, `VERTEX_AUTH_MODE` determines which one is used.
+
+4. Double-click **Check Gemini Setup.cmd**, or run `node scripts/parse-rejections.js --check-gemini`. This checks settings and credential loading without uploading PDFs or calling the model; the live test verifies API/model access.
+5. Test selected pages before a full run:
+
+   ```powershell
+   node scripts/parse-rejections.js --engine gemini --input "rejections/input/Mf03.pdf" --pages 1,3,5
+   ```
+
+6. Open the new output folder's `rejections.csv`, `review-report.csv`, and `gemini-audit`. Compare the extracted values to the original PDFs. Model-generated results remain flagged for review even when complete.
+7. Once satisfied, double-click **Parse Rejections With Gemini.cmd** to process all PDFs in `rejections/input` into a new output folder. This does not read Gmail, update email checkpoints, clear earlier exports or print invoices.
+
+HTTP 401 means authentication needs attention. HTTP 403 usually requires checking IAM, API enablement, billing or key restrictions. HTTP 404 requires checking the selected model ID and location. HTTP 429 indicates quota/rate limits. The parser reports these without exposing raw provider error bodies or credentials and does not automatically retry paid requests.
+
+References: [Google Cloud authentication](https://cloud.google.com/vertex-ai/generative-ai/docs/start/api-keys), [local ADC setup](https://cloud.google.com/docs/authentication/set-up-adc-local-dev-environment), [Gemini PDF input](https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/document-understanding), [structured output](https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/control-generated-output), [Flash model documentation](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-flash).
+
 ## 1. Get the latest project
 
 Download the code from [3tEmailReader on GitHub](https://github.com/gauravjain82/3tEmailReader) using **Code > Download ZIP**, then extract it into a permanent local folder. If using Git, run `git pull` in your existing checkout.

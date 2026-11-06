@@ -6,8 +6,8 @@ const root=path.resolve(__dirname,'../..');
 function localHandwritingReady(){
   return fs.existsSync(path.join(root,'.handwriting-venv',process.platform==='win32'?'Scripts/python.exe':'bin/python'))&&fs.existsSync(path.join(root,'rejections','models','trocr-base-handwritten','source.json'));
 }
-async function readLocalHandwriting(file,output){
-  return runHandwritingTest(['--input',file],{lock:false,setExitCode:false,outputRoot:path.join(output,'handwriting')});
+async function readLocalHandwriting(file,output,pages){
+  return runHandwritingTest(['--input',file],{lock:false,setExitCode:false,outputRoot:path.join(output,'handwriting'),pages});
 }
 function applyHandwriting(parsed,run,comparisons=[]){
   const results=(run?.results||[]).filter(r=>r.page===parsed.page&&r.invoice===parsed.invoiceNumber);

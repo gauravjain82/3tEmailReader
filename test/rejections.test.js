@@ -56,6 +56,8 @@ test('batch isolates failures, exports exact Excel columns, and suppresses repea
   fs.writeFileSync(path.join(dir,'mail-checkpoint.txt'),'unchanged');
   const summary=await runBatch({input,output,read:async file=>{if(file.endsWith('broken.pdf'))throw Error('Unreadable PDF');return pages;}});
   assert.equal(summary.invoices,4);assert.equal(summary.rows,4);assert.equal(summary.duplicates,4);assert.equal(summary.failed,1);
+  assert.deepEqual(summary.fileResults.map(r=>[r.filename,r.pages,r.rows,r.failed]),[['a.pdf',4,4,0],['b.PDF',4,0,0],['broken.pdf',0,0,1]]);
+  assert.match(fs.readFileSync(path.join(output,'file-summary.csv'),'utf8'),/broken.pdf,0,0,0,1,0,0/);
   const csv=fs.readFileSync(path.join(output,'rejections.csv'),'utf8').replace(/^\uFEFF/,'');
   assert.equal(csv.split('\r\n')[0],COLUMNS.join(','));assert.equal(csv.trim().split('\r\n').length,5);
   assert.match(fs.readFileSync(path.join(output,'review-report.csv'),'utf8'),/FAILED,Unreadable PDF/);

@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$ImagePath)
+param([Parameter(Mandatory=$true)][string]$ImagePath,[switch]$IncludeWords)
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
@@ -25,7 +25,16 @@ try {
     $bitmap = Await-OcrOperation ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
     $result = Await-OcrOperation ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
     $lines = @($result.Lines | ForEach-Object { $_.Text })
-    @{ text = $result.Text; lines = $lines; engine = 'Windows.Media.Ocr' } | ConvertTo-Json -Depth 4 -Compress
+    $output=@{ text = $result.Text; lines = $lines; engine = 'Windows.Media.Ocr' }
+    if($IncludeWords) {
+        $words=@()
+        foreach($line in $result.Lines){foreach($word in $line.Words){
+            $box=$word.BoundingRect
+            $words+=@{text=$word.Text;x=$box.X/$bitmap.PixelWidth;y=($box.Y+$box.Height)/$bitmap.PixelHeight;w=$box.Width/$bitmap.PixelWidth;h=$box.Height/$bitmap.PixelHeight}
+        }}
+        $output.words=$words
+    }
+    $output | ConvertTo-Json -Depth 5 -Compress
 } catch {
     [Console]::Error.WriteLine($_.Exception.Message)
     exit 1

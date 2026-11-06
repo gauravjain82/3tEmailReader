@@ -4,13 +4,14 @@ const crypto=require('crypto');
 const {promisify}=require('util');
 const execute=promisify(require('child_process').execFile);
 const {COLUMNS,date,parseAcknowledgement}=require('./parser');
-const {decimal}=require('../pdf/decimal');
+const {decimal,minor,productMinor}=require('../pdf/decimal');
 const {extractItemName,partNameForItem,plantForLocation}=require('./mappings');
+const {prepareField}=require('./imagePreparation');
 const MONEY=new Set(['Basic value','Packing charges','CGST Amt.','SGST Amt.','Total Value']);
 function extractField(field,text,invoiceDate){
   const raw=String(text||'').trim().replace(/^[|\[\]{}]+|[|\[\]{}]+$/g,'').trim(),compact=raw.replace(/\s/g,'').toUpperCase();
   if(!raw)return '';
-  if(field==='Invoice Number')return compact.match(/\bHG\d{10}\b/)?.[0]||'';
+  if(field==='Invoice Number')return compact.match(/\bH[GE]\d{10}\b/)?.[0]||'';
   if(field==='Invoice Date')return date(raw)||parseAcknowledgement(raw,invoiceDate).date;
   if(field==='Ack. No'||field==='Ack Date')return parseAcknowledgement(raw,invoiceDate)[field==='Ack. No'?'number':'date'];
   if(field==='Item Name')return extractItemName(raw);
@@ -50,12 +51,33 @@ function compareFields(row,readings){
     else if(!Number.isFinite(tesseract.confidence)||tesseract.confidence<(field==='Ack. No'||field==='Ack Date'?80:70))status='LOW_CONFIDENCE';
     else if(source&&source!==a)status='PDF_TEXT_CONFLICT';
     else status='MATCH';
-    return {field,comparison_source:sourceField,pdf_value:row[field]||'',windows_value:a,tesseract_value:b,tesseract_confidence:tesseract.confidence??'',status,windows_raw:windows.text||'',tesseract_raw:tesseract.text||'',reason:status==='NO_MAPPING'?'No supplied mapping for the recognized source; output left blank.':[windows.error,tesseract.error].filter(Boolean).join('; '),crop:r.crop||''};
+    return {field,comparison_source:sourceField,pdf_value:row[field]||'',windows_value:a,tesseract_value:b,tesseract_confidence:tesseract.confidence??'',status,windows_raw:windows.text||'',tesseract_raw:tesseract.text||'',reason:status==='NO_MAPPING'?'No supplied mapping for the recognized source; output left blank.':[windows.error,tesseract.error].filter(Boolean).join('; '),crop:r.crop||'',imagePreparation:r.imagePreparation};
   });
 }
 function applyComparison(parsed,comparisons){
   for(let n=0;n<parsed.rows.length;n++){
     const fields=comparisons.filter(c=>c.line===n+1),row=parsed.rows[n];
+    const originalQty=row.Qty;
+    if(parsed.textSource==='scanned-page-ocr'){
+      for(const c of fields){
+        if(['Invoice Number','Ack. No','Ack Date'].includes(c.field))continue;
+        if(!['MATCH','PDF_TEXT_CONFLICT'].includes(c.status)||!c.windows_value||c.windows_value!==c.tesseract_value)continue;
+        if(c.windows_value!==row[c.field]){
+          parsed.notes.push(`Line ${n+1}: ${c.field} full-page OCR candidate replaced by agreeing Windows/Tesseract field readings; original candidate retained in ocr-comparison.csv.`);
+          row[c.field]=c.windows_value;
+        }
+      }
+      row['PART NAME']=partNameForItem(row['Item Name']);
+      const unitPrice=parsed.sourceFields?.[n]?.unitPrice;
+      if(row.Qty!==originalQty&&row.Qty&&row['Basic value']&&unitPrice&&productMinor(row.Qty,unitPrice)!==minor(row['Basic value'])){
+        row.Qty='';parsed.issues.push(`Line ${n+1}: OCR quantity does not match printed unit price and basic value; quantity left blank for review.`);
+      }
+      const components=['Basic value','Packing charges','CGST Amt.','SGST Amt.'];
+      if(row['Total Value']&&(!components.every(f=>row[f])||components.reduce((sum,f)=>sum+minor(row[f]),0n)!==minor(row['Total Value']))){
+        row['Total Value']='';parsed.issues.push(`Line ${n+1}: total did not reconcile after field OCR; left blank for review.`);
+      }
+      parsed.issues=parsed.issues.filter(issue=>!COLUMNS.some(field=>row[field]&&issue===`Line ${n+1}: ${field} missing.`));
+    }
     const ack=fields.find(c=>c.field==='Ack. No'),ackDate=fields.find(c=>c.field==='Ack Date');
     if(ack?.status==='MATCH'&&ackDate?.status==='MATCH'){
       row['Ack. No']=ack.windows_value;row['Ack Date']=ackDate.windows_value;
@@ -64,8 +86,15 @@ function applyComparison(parsed,comparisons){
   }
   if(parsed.rows.every(r=>r['Ack. No']&&r['Ack Date']))parsed.issues=parsed.issues.filter(i=>!/Handwritten acknowledgement|Ack\. No missing|Ack Date missing/.test(i));
   const flagged=comparisons.filter(c=>c.status!=='MATCH');
-  if(flagged.length)parsed.issues.push(`${flagged.length} OCR field comparison(s) require review; see discrepancy-report.csv. PDF-text candidate values are retained, not automatically resolved.`);
+  if(flagged.length)parsed.issues.push(`${flagged.length} OCR field comparison(s) require review; see discrepancy-report.csv. `+(parsed.textSource==='scanned-page-ocr'?'Agreeing field readings can correct full-page OCR candidates; all original readings and disagreements remain in the reports.':'PDF-text candidate values are retained, not automatically resolved.'));
   parsed.ocrComparison=comparisons;
+}
+function selectReading(field,attempts,invoiceDate,engine){
+  const usable=attempts.filter(a=>!a.error&&extractField(field,a.text,invoiceDate)&&(engine!=='tesseract'||a.confidence>=70));
+  const values=[...new Set(usable.map(a=>extractField(field,a.text,invoiceDate)))];
+  if(values.length>1)return {error:'Image variants produced conflicting '+engine+' readings.',attempts};
+  const selected=usable.sort((a,b)=>(b.confidence||0)-(a.confidence||0))[0]||attempts.find(a=>!a.error)||attempts[0];
+  return {...selected,attempts};
 }
 function createDualOcr(output){
   let workerPromise,worker,workerError;
@@ -118,6 +147,7 @@ function createDualOcr(output){
           const w=Math.ceil(image.width*box.width),h=Math.ceil(image.height*box.height),padding=16;
           const canvas=createCanvas(w+padding*2,h+padding*2),ctx=canvas.getContext('2d');ctx.fillStyle='white';ctx.fillRect(0,0,canvas.width,canvas.height);
           ctx.drawImage(image,image.width*box.x,image.height*box.y,w,h,padding,padding,w,h);
+          const sourceCrop=canvas.toBuffer('image/png');
           const pixels=ctx.getImageData(0,0,canvas.width,canvas.height);
           // Remove long table rules without changing character shapes or digits.
           const columns=[],lines=[];
@@ -132,9 +162,27 @@ function createDualOcr(output){
           ctx.putImageData(pixels,0,0);
           const crop=path.join(directory,`${prefix}-page-${parsed.page}-line-${n+1}-${field.replace(/[^a-z0-9]/gi,'_')}.png`);
           fs.writeFileSync(crop,original);
+          if(parsed.textSource==='scanned-page-ocr')fs.writeFileSync(crop.replace(/\.png$/,'.source.png'),sourceCrop);
           const binaryCrop=crop.replace(/\.png$/,'.windows.png');fs.writeFileSync(binaryCrop,canvas.toBuffer('image/png'));
           const results=await Promise.allSettled([readWindows(binaryCrop),readTesseract(original,field==='Ack. No'||field==='Ack Date')]);
           const reading={crop,windows:results[0].status==='fulfilled'?results[0].value:{error:String(results[0].reason)},tesseract:results[1].status==='fulfilled'?results[1].value:{error:String(results[1].reason)}};
+          if(parsed.textSource==='scanned-page-ocr'&&!['Ack. No','Ack Date'].includes(field)){
+            const sourceField=field==='PART NAME'?'Item Name':field==='Cust. Code'?'Location(Plant)':field;
+            const originalStatus=compareFields(parsed.rows[n],{[sourceField]:reading}).find(c=>c.field===field).status;
+            if(originalStatus!=='MATCH'){
+              const windowsAttempts=[{...reading.windows,variant:'original'}],tesseractAttempts=[{...reading.tesseract,variant:'original'}];
+              for(const binary of [false,true]){
+                const enhanced=await prepareField(sourceCrop,{binary});
+                const enhancedPath=crop.replace(/\.png$/,binary?'.enhanced-binary.png':'.enhanced-gray.png');fs.writeFileSync(enhancedPath,enhanced.buffer);
+                const [windows,tesseract]=await Promise.all([readWindows(enhancedPath),readTesseract(enhanced.buffer,false)]);
+                const metadata={variant:binary?'enhanced-binary':'enhanced-gray',crop:enhancedPath,angle:enhanced.angle,scale:enhanced.scale};
+                windowsAttempts.push({...windows,...metadata});tesseractAttempts.push({...tesseract,...metadata});
+              }
+              reading.windows=selectReading(sourceField,windowsAttempts,parsed.rows[n]['Invoice Date'],'windows');
+              reading.tesseract=selectReading(sourceField,tesseractAttempts,parsed.rows[n]['Invoice Date'],'tesseract');
+              reading.imagePreparation={windowsAttempts,tesseractAttempts};
+            }
+          }
           readings[field]=reading;cache.set(key,reading);
         }
         comparisons.push(...compareFields(parsed.rows[n],readings).map(c=>({...c,line:n+1})));
@@ -151,4 +199,4 @@ function createDualOcr(output){
   }
   return {compare,close};
 }
-module.exports={createDualOcr,compareFields,extractField,applyComparison};
+module.exports={createDualOcr,compareFields,extractField,applyComparison,selectReading};
