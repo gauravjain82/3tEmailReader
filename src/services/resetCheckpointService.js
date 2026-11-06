@@ -14,7 +14,7 @@ function parseResetTime(date,time,now=Date.now()) {
   if(!Number.isSafeInteger(since)||since<0||since>Math.floor(now/1000))throw Error('Reset time must be after 1970 and cannot be in the future.');
   return since;
 }
-function resetCheckpoint({dataDir,config,baseQuery='in:inbox has:attachment filename:pdf',since,now=Date.now()}) {
+function resetCheckpoint({dataDir,config,baseQuery='in:inbox has:attachment filename:pdf',since,replay=false,now=Date.now()}) {
   config=validateConfig(config);
   if(!Number.isSafeInteger(since)||since<0||since>Math.floor(now/1000))throw Error('Invalid reset timestamp or future time.');
   const unlock=acquireRunLock(dataDir);let store;
@@ -23,11 +23,11 @@ function resetCheckpoint({dataDir,config,baseQuery='in:inbox has:attachment file
     const key=checkpointKey(config,baseQuery),resetAt=new Date(now).toISOString();
     return store.db.transaction(()=>{
       const previous=store.db.prepare('SELECT value FROM app_state WHERE key=?').get(key)?.value ?? null;
-      const value=JSON.stringify({since});
+      const value=JSON.stringify(replay ? {since,replay:true} : {since});
       const historyKey='gmail-reset-history:'+crypto.randomUUID();
       store.db.prepare('INSERT INTO app_state(key,value) VALUES (?,?)').run(historyKey,JSON.stringify({checkpointKey:key,previousValue:previous,newValue:value,resetAt}));
       store.db.prepare('INSERT INTO app_state(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key,value);
-      return {since,resetAt,historyKey,senders:config.allowedSenders};
+      return {since,replay,resetAt,historyKey,senders:config.allowedSenders};
     }).immediate();
   } finally {if(store)store.close();unlock();}
 }

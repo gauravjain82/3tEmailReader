@@ -37,6 +37,7 @@ async function runOnce({api,store,dataDir,config,baseQuery='in:inbox has:attachm
   const runId = pending.pendingRunId || crypto.randomUUID();
   store.db.prepare('UPDATE app_state SET value=? WHERE key=?').run(JSON.stringify({...pending,pendingRunId:runId}),key);
   const query = buildQuery(baseQuery,config.allowedSenders,since,until);
+  if(pending.replay)console.log('Replay enabled: reprocessing matching emails, including previously processed attachments. Invoice-number duplicates and print history are retained.');
   const summary = { messagesChecked:0, skippedSenders:0, failedMessages:0, since, until };
   console.log('Reading configured senders once. Window:',new Date(since*1000).toISOString(),'to',new Date(until*1000).toISOString());
   let pageToken;
@@ -48,7 +49,7 @@ async function runOnce({api,store,dataDir,config,baseQuery='in:inbox has:attachm
       if (seen.has(message.id)) continue;
       seen.add(message.id);
       try {
-        const result = await handleMessage(api,message.id,store,dataDir,{allowedSenders:config.allowedSenders,invoiceNumberFilenameSenders:config.invoiceNumberFilenameSenders,exportAfter:false,runId});
+        const result = await handleMessage(api,message.id,store,dataDir,{allowedSenders:config.allowedSenders,invoiceNumberFilenameSenders:config.invoiceNumberFilenameSenders,reprocessCompleted:pending.replay===true,exportAfter:false,runId});
         if (result?.failed) summary.failedMessages++;
         if (result?.skippedSender) summary.skippedSenders++;
       } catch (e) { summary.failedMessages++; console.error('Message error:',message.id,e.message); }

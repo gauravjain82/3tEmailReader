@@ -77,9 +77,9 @@ The PDF bytes stay unchanged, and the original attachment name is retained in me
 
 ### Reset the Gmail start date and time
 
-Close the extractor, then double-click **Reset Gmail Start Time.cmd**. Enter a date as `DD-MM-YYYY` (Enter uses today's date in India) and a 24-hour time as `HH:MM` (Enter uses `06:00`). Times use IST, UTC+05:30. Enter `Q` at either prompt to cancel. Invalid/future times are rejected. Then launch the normal extractor and choose **Keep previous results**.
+Close the extractor, then double-click **Reset Gmail Start Time.cmd**. Enter a date as `DD-MM-YYYY` (Enter uses today's date in India) and a 24-hour time as `HH:MM` (Enter uses `06:00`). Times use IST, UTC+05:30. Then choose **2 - Replay all matching emails** (default) to reprocess previously handled attachments, including invoices whose results were archived. Choose **1 - Reset time only** to keep skipping handled attachments. Enter `Q` at any prompt to cancel. Invalid/future times are rejected. Then launch the normal extractor and choose **Keep previous results**.
 
-This changes the saved checkpoint for your current configured senders and Gmail query. It keeps existing invoices, PDFs, CSVs, print history and attachment tracking. Previously processed attachments are skipped even within the reset time window. The previous checkpoint is recorded in SQLite reset history. This command does not parse Gmail or print anything. Terminal alternative: `npm run reset:time`.
+This changes the saved checkpoint for your current configured senders and Gmail query. It keeps existing invoices, PDFs, CSVs, print history and attachment tracking. Replay mode bypasses the processed-attachment skip for matching emails in the reset time window. Sender and Gmail-query filters still apply. If Gmail messages themselves were archived, remove `in:inbox` from `GMAIL_QUERY` to include them. Replay remains enabled after failures and turns off after the next successful run. Duplicate invoice numbers remain excluded from CSV, and prior print history is retained. The previous checkpoint is recorded in SQLite reset history. This command does not parse Gmail or print anything. Terminal alternative: `npm run reset:time`.
 
 ## 1. Get the latest project
 

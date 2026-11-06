@@ -21,7 +21,7 @@ async function withRetry(call, sleep = ms => new Promise(resolve => setTimeout(r
     }
   }
 }
-async function processMessage(api, id, store, dataDir, {allowedSenders,invoiceNumberFilenameSenders=[],exportAfter=true,runId} = {}) {
+async function processMessage(api, id, store, dataDir, {allowedSenders,invoiceNumberFilenameSenders=[],reprocessCompleted=false,exportAfter=true,runId} = {}) {
   const response = await withRetry(() => api.users.messages.get({ userId:'me', id, format:'full' }));
   const m = response.data;
   const sender = header(m.payload?.headers,'from'), subject = header(m.payload?.headers,'subject');
@@ -38,7 +38,7 @@ async function processMessage(api, id, store, dataDir, {allowedSenders,invoiceNu
       .find(r => r.pdf_path && path.basename(r.pdf_path.replace(/\\+/g, path.sep)).startsWith(prefix));
     if (!store.find(id,key) && legacy) key = legacy.attachment_key;
     const existing = store.find(id,key);
-    if (existing?.status === 'done') continue;
+    if (existing?.status === 'done' && !reprocessCompleted) continue;
     const name = p.filename || `attachment-${index}.pdf`;
     const old = store.db.prepare('SELECT * FROM invoices WHERE gmail_id=? AND attachment_key=?').get(id,key);
     const received = Number(m.internalDate);
@@ -72,7 +72,7 @@ async function processMessage(api, id, store, dataDir, {allowedSenders,invoiceNu
       const downloadName = useInvoiceNumber ? result.invoiceNumber.replace(/[<>:"/\\|?*\x00-\x1f]/g,'_') + '.pdf' : name;
       if(meta.pdf_path)writeOriginal(meta.pdf_path,bytes);
       else meta.pdf_path=writeNamedFile(path.resolve(dataDir,'pdfs'),downloadName,bytes);
-      const saved = store.save(meta,result);
+      const saved = store.save(meta,result,{reprocess:reprocessCompleted});
       if (saved.is_duplicate) { summary.duplicates++; console.log('Duplicate invoice:',result.invoiceNumber,'original record:',saved.duplicate_of); }
       else console.log('Processed:', name, id, result.validation.status);
       if (result.validation.status === 'FAILED') { summary.failed=true; console.error('Extraction failed:', name, id, result.error); }
