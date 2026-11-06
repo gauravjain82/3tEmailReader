@@ -48,7 +48,7 @@ async function runOnce({api,store,dataDir,config,baseQuery='in:inbox has:attachm
       if (seen.has(message.id)) continue;
       seen.add(message.id);
       try {
-        const result = await handleMessage(api,message.id,store,dataDir,{allowedSenders:config.allowedSenders,exportAfter:false,runId});
+        const result = await handleMessage(api,message.id,store,dataDir,{allowedSenders:config.allowedSenders,invoiceNumberFilenameSenders:config.invoiceNumberFilenameSenders,exportAfter:false,runId});
         if (result?.failed) summary.failedMessages++;
         if (result?.skippedSender) summary.skippedSenders++;
       } catch (e) { summary.failedMessages++; console.error('Message error:',message.id,e.message); }

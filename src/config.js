@@ -18,7 +18,13 @@ function validateConfig(config) {
     firstRunAfter = Math.floor(Date.parse(config.firstRunAfter) / 1000);
     if (firstRunAfter < 0) throw Error('firstRunAfter must be after 1970.');
   }
-  return { allowedSenders, firstRunAfter };
+  const filenameSenders = config.invoiceNumberFilenameSenders ?? [];
+  if (!Array.isArray(filenameSenders)) throw Error('invoiceNumberFilenameSenders must be an array of complete sender email addresses.');
+  const invoiceNumberFilenameSenders = [...new Set(filenameSenders.map(value => {
+    if (typeof value !== 'string' || !EMAIL.test(value.trim())) throw Error('invoiceNumberFilenameSenders must contain complete email addresses, without display names or wildcards.');
+    return value.trim().toLowerCase();
+  }))].sort();
+  return { allowedSenders, firstRunAfter, invoiceNumberFilenameSenders };
 }
 function loadConfig(root) { const config = JSON.parse(fs.readFileSync(path.join(root,'config.json'),'utf8')); validateConfig(config); return config; }
 module.exports = { loadConfig, validateConfig, senderAddress };

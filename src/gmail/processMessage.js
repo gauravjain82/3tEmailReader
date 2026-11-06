@@ -21,7 +21,7 @@ async function withRetry(call, sleep = ms => new Promise(resolve => setTimeout(r
     }
   }
 }
-async function processMessage(api, id, store, dataDir, {allowedSenders,exportAfter=true,runId} = {}) {
+async function processMessage(api, id, store, dataDir, {allowedSenders,invoiceNumberFilenameSenders=[],exportAfter=true,runId} = {}) {
   const response = await withRetry(() => api.users.messages.get({ userId:'me', id, format:'full' }));
   const m = response.data;
   const sender = header(m.payload?.headers,'from'), subject = header(m.payload?.headers,'subject');
@@ -64,9 +64,14 @@ async function processMessage(api, id, store, dataDir, {allowedSenders,exportAft
       meta.sha256 = hash;
       const base = `${safe(id)}-${index}-${hash.slice(0,12)}`;
       meta.json_path = path.join(dataDir, 'json', base + '.json');
-      if(meta.pdf_path)writeOriginal(meta.pdf_path,bytes);
-      else meta.pdf_path=writeNamedFile(path.resolve(dataDir,'pdfs'),name,bytes);
       const result = await processPdf(bytes);
+      const useInvoiceNumber = invoiceNumberFilenameSenders.includes(senderAddress(sender)) &&
+        result.documentType === 'TAX_INVOICE' && result.invoiceNumber && result.validation.status !== 'FAILED';
+      // Retain the email's original filename in metadata; only the saved PDF name changes.
+      // Sanitize invoice references before treating them as a filename (e.g. INV/123).
+      const downloadName = useInvoiceNumber ? result.invoiceNumber.replace(/[<>:"/\\|?*\x00-\x1f]/g,'_') + '.pdf' : name;
+      if(meta.pdf_path)writeOriginal(meta.pdf_path,bytes);
+      else meta.pdf_path=writeNamedFile(path.resolve(dataDir,'pdfs'),downloadName,bytes);
       const saved = store.save(meta,result);
       if (saved.is_duplicate) { summary.duplicates++; console.log('Duplicate invoice:',result.invoiceNumber,'original record:',saved.duplicate_of); }
       else console.log('Processed:', name, id, result.validation.status);

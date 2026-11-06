@@ -54,7 +54,7 @@ function csvCell(value) {
 }
 
 async function testLatestEmails({api,projectRoot,config,log=console.log,print=false,choosePrint,printOptions={}}) {
-  const {allowedSenders}=validateConfig(config);
+  const {allowedSenders,invoiceNumberFilenameSenders}=validateConfig(config);
   const outputDir=path.resolve(projectRoot,'data','test-runs',new Date().toISOString().replace(/[:.]/g,'-')+'-'+crypto.randomUUID());
   // Never open the live database or invoke the normal run/checkpoint service.
   // Printing uses separate persistent test print history only when requested.
@@ -72,7 +72,7 @@ async function testLatestEmails({api,projectRoot,config,log=console.log,print=fa
         if(!message){entry.status='NO_MATCH';log('No PDF email found:',sender);save();continue;}
         Object.assign(entry,{gmailId:message.id,subject:header(message,'subject'),receivedAt:new Date(Number(message.internalDate)).toISOString(),status:'PROCESSING'});save();
         log('Selected:',entry.subject,'received',entry.receivedAt);
-        const processing=await processMessage(api,message.id,store,outputDir,{allowedSenders:[sender],exportAfter:false,runId});
+        const processing=await processMessage(api,message.id,store,outputDir,{allowedSenders:[sender],invoiceNumberFilenameSenders,exportAfter:false,runId});
         entry.processing=processing;
         entry.status=processing.failed||processing.skippedSender?'FAILED':'PROCESSED';
       }catch(error){entry.status='FAILED';entry.error=error.message;log('Test email failed:',sender,error.message);}

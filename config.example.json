@@ -1,4 +1,5 @@
 {
   "allowedSenders": ["billing@example.com", "invoices@example.com"],
-  "firstRunAfter": null
+  "firstRunAfter": null,
+  "invoiceNumberFilenameSenders": []
 }

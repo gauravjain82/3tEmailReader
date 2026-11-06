@@ -14,6 +14,11 @@ function fstInvoiceParser(text) {
   const seen = new Set();
   const tables = [...text.matchAll(/Rate Amt Rate Amt\s*\n([\s\S]*?)(?=Total Invoice Value)/gi)].map(m => m[1]);
   for (const m of tables.join('\n').matchAll(row)) {
+    // Some FST PDFs join the seal's material grade (e.g. A437) to the
+    // Maruti customer part. Restrict splitting to this description/part layout.
+    const joined = /Maruti Suzuki/i.test(doc.buyerName || '') && /\d[\d,.]*\s*X\s*\d/i.test(m[2])
+      ? m[3].match(/^([A-Z]\d{3})(\d{5}M[A-Z0-9]{5}(?:-[A-Z0-9]+)?)$/) : null;
+    if (joined) { m[2] += ' ' + joined[1]; m[3] = joined[2]; }
     const key = m.slice(1).join('|');
     if (seen.has(key)) continue; // Recipient/transporter/assessee copies are not extra goods.
     seen.add(key);

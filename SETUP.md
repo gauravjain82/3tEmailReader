@@ -69,6 +69,12 @@ HTTP 401 means authentication needs attention. HTTP 403 usually requires checkin
 
 References: [Google Cloud authentication](https://cloud.google.com/vertex-ai/generative-ai/docs/start/api-keys), [local ADC setup](https://cloud.google.com/docs/authentication/set-up-adc-local-dev-environment), [Gemini PDF input](https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/document-understanding), [structured output](https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/control-generated-output), [Flash model documentation](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-flash).
 
+### Save PDFs by invoice number for selected senders
+
+Add `"invoiceNumberFilenameSenders": ["ext.Lovinder.Singh@fst.com"]` to your local `config.json` to save new Sigma/FST PDF downloads as, for example, `DS0003468341.pdf`. This applies to normal runs and latest-email tests. Other senders keep the attachment filename. The sender must also be in `allowedSenders` to be processed. Use an empty array to disable this option.
+
+The PDF bytes stay unchanged, and the original attachment name is retained in metadata. If an invoice number cannot be extracted or the attachment is not a tax invoice, its original filename is used. Unsafe filename characters are replaced with underscores. Different PDFs sharing an invoice number use ` (2)`, ` (3)`, etc.; existing downloaded files keep their current paths. Duplicate detection still uses invoice number.
+
 ## 1. Get the latest project
 
 Download the code from [3tEmailReader on GitHub](https://github.com/gauravjain82/3tEmailReader) using **Code > Download ZIP**, then extract it into a permanent local folder. If using Git, run `git pull` in your existing checkout.
@@ -177,7 +183,7 @@ Old `PRINT_ENGINE=adobe`, `ADOBE_READER` and signature-related `.env` settings a
 
 For a test that ignores the saved last-run time, double-click **Test Latest Emails.cmd** or run `npm run test:email`. It selects the latest email containing PDFs from **each exact sender configured in `config.json`**, including archived mail (Gmail normally excludes Spam/Trash). It does not use `firstRunAfter`, the normal Gmail query or the extraction checkpoint. It compares received times across the search results, so mailboxes with a large history can take longer to search.
 
-Every invocation creates a new folder under `data/test-runs/<timestamp>-<id>/`, containing `invoices.csv`, a single `pdfs/` folder for all downloaded PDFs, `failure-report.csv`, `attachments.csv` (downloaded attachment metadata, including duplicates), and `test-report.json`. No subfolder is created for each email or invoice. Original filenames are kept; different PDFs sharing a name use ` (2)`, ` (3)`, etc. Identical same-named PDFs share one file and keep their separate attachment audit records. New normal Gmail downloads also share `data/pdfs/`. Existing files are retained at their saved paths.
+Every invocation creates a new folder under `data/test-runs/<timestamp>-<id>/`, containing `invoices.csv`, a single `pdfs/` folder for all downloaded PDFs, `failure-report.csv`, `attachments.csv` (downloaded attachment metadata, including duplicates), and `test-report.json`. No subfolder is created for each email or invoice. Original filenames are kept by default; senders listed in `invoiceNumberFilenameSenders` use the extracted invoice number instead (see above). Different PDFs sharing a name use ` (2)`, ` (3)`, etc. Identical same-named PDFs share one file and keep their separate attachment audit records. New normal Gmail downloads also share `data/pdfs/`. Existing files are retained at their saved paths.
 
 After parsing, **Test Latest Emails.cmd** offers to print the unique test invoices through SumatraPDF. For direct printing, double-click **Test Latest Emails And Print.cmd** or run `npm run test:email -- --print`. For parsing only, run `npm run test:email -- --no-print`. Printing uses SumatraPDF directly on the Windows default physical printer for the first original-recipient page, one copy and Fit. It does not invoke Adobe or verify signatures. The test reuses complete downloads for printing; internal print snapshots/job files are kept separately under `print-work/`.
 

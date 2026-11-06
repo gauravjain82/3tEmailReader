@@ -89,7 +89,8 @@ Edit `config.json` to list the exact sender email addresses you want to process:
 ```json
 {
   "allowedSenders": ["billing@example.com", "invoices@example.com"],
-  "firstRunAfter": null
+  "firstRunAfter": null,
+  "invoiceNumberFilenameSenders": []
 }
 ```
 
@@ -111,7 +112,7 @@ PAGE_SIZE=50
 Every result page is processed. `POLL_SECONDS` and `MAX_MESSAGES_PER_POLL` are no longer used. The date window uses epoch seconds to avoid Gmail's timezone interpretation of date-only search terms; see [Google's filtering guide](https://developers.google.com/workspace/gmail/api/guides/filtering).
 
 ## Output
-- `data/pdfs/`: all new original downloads share this single folder. Original attachment filenames are preserved, including spaces and Unicode; unsafe Windows characters are sanitized. Different PDFs with the same name receive ` (2)`, ` (3)`, etc. Byte-identical files with the same name reuse the existing file while retaining separate attachment provenance. Existing downloads remain at their saved paths. Saved originals likewise share one folder per run, with no per-invoice subfolders.
+- `data/pdfs/`: all new original downloads share this single folder. Original attachment filenames are preserved by default, including spaces and Unicode; unsafe Windows characters are sanitized. Add sender addresses to `invoiceNumberFilenameSenders` in `config.json` to save their new tax-invoice PDFs using the extracted invoice number (e.g. `DS0003468341.pdf`). Original names stay in metadata; unreadable invoice numbers fall back to the attachment name. Different PDFs with the same name receive ` (2)`, ` (3)`, etc. Byte-identical files with the same name reuse the existing file while retaining separate attachment provenance. Existing downloads remain at their saved paths. Saved originals likewise share one folder per run, with no per-invoice subfolders.
 - `data/json/`: one JSON document per attachment
 - `data/invoices.csv`: main export, excluding repeated invoice numbers
 - `data/duplicates.csv`: historical and newly detected duplicates with links to their original invoice records
