@@ -75,6 +75,12 @@ Add `"invoiceNumberFilenameSenders": ["ext.Lovinder.Singh@fst.com"]` to your loc
 
 The PDF bytes stay unchanged, and the original attachment name is retained in metadata. If an invoice number cannot be extracted or the attachment is not a tax invoice, its original filename is used. Unsafe filename characters are replaced with underscores. Different PDFs sharing an invoice number use ` (2)`, ` (3)`, etc.; existing downloaded files keep their current paths. Duplicate detection still uses invoice number.
 
+### Reset the Gmail start date and time
+
+Close the extractor, then double-click **Reset Gmail Start Time.cmd**. Enter a date as `DD-MM-YYYY` (Enter uses today's date in India) and a 24-hour time as `HH:MM` (Enter uses `06:00`). Times use IST, UTC+05:30. Enter `Q` at either prompt to cancel. Invalid/future times are rejected. Then launch the normal extractor and choose **Keep previous results**.
+
+This changes the saved checkpoint for your current configured senders and Gmail query. It keeps existing invoices, PDFs, CSVs, print history and attachment tracking. Previously processed attachments are skipped even within the reset time window. The previous checkpoint is recorded in SQLite reset history. This command does not parse Gmail or print anything. Terminal alternative: `npm run reset:time`.
+
 ## 1. Get the latest project
 
 Download the code from [3tEmailReader on GitHub](https://github.com/gauravjain82/3tEmailReader) using **Code > Download ZIP**, then extract it into a permanent local folder. If using Git, run `git pull` in your existing checkout.

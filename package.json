@@ -7,6 +7,7 @@
     "setup": "node scripts/setup.js",
     "setup:check": "node scripts/setup.js --check",
     "test:email": "node scripts/test-latest-email.js",
+    "reset:time": "node scripts/reset-last-run.js",
     "auth": "node src/auth.js",
     "start": "node src/index.js",
     "originals": "node src/services/invoiceOutputService.js",

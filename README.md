@@ -100,7 +100,7 @@ When no checkpoint exists for the configured senders/query, the first run reads 
 
 After each successful batch, SQLite saves the completed time window. The next double-click processes emails received since that window, with a one-second overlap protected by attachment and invoice-number duplicate checks. The run freezes its upper boundary at startup, so mail arriving during the run is picked up next time. Failed downloads, PDF extraction errors, API failures or export errors leave the checkpoint unchanged; double-click again to retry. `NEEDS_REVIEW` is a completed extraction requiring human review, so it does not block the checkpoint.
 
-Sender configurations have separate checkpoints. Changing `firstRunAfter` does not rewind an existing checkpoint. For old files already recorded in SQLite, use `npm run reprocess`.
+Sender configurations have separate checkpoints. Changing `firstRunAfter` does not rewind an existing checkpoint. To change the saved start time, close the extractor and double-click **Reset Gmail Start Time.cmd** (or run `npm run reset:time`). Enter a date as `DD-MM-YYYY` and a 24-hour time as `HH:MM`; both use India Standard Time (UTC+05:30). Defaults are today's date and `06:00`. Enter `Q` to cancel. Future or invalid times are rejected. Only the checkpoint for the current senders/query is changed; its previous value is recorded in SQLite reset history. Saved results, PDFs, attachment deduplication and print history are retained. Then run the extractor with **Keep previous results**. Already processed attachments remain skipped. For old files already recorded in SQLite, use `npm run reprocess`.
 
 Optional `.env` settings add further Gmail restrictions; sender and time-window filters always apply:
 
