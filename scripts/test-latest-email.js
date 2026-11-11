@@ -1,5 +1,5 @@
 require('dotenv').config({quiet:true});
-const {gmail,root}=require('../src/common');
+const {gmail,root,gmailErrorMessage}=require('../src/common');
 const {loadConfig}=require('../src/config');
 const {testLatestEmails}=require('../src/services/latestEmailTestService');
 const readline=require('node:readline/promises');
@@ -13,4 +13,4 @@ const readline=require('node:readline/promises');
   }:undefined;
   const report=await testLatestEmails({api:gmail(),projectRoot:root,config,print:args.includes('--print'),choosePrint});
   if(report.hasIssues){console.log('Test completed with issues. Review test-report.json and failure-report.csv in the displayed folder.');process.exitCode=1;}
-})().catch(error=>{console.error('Email test failed:',error.message);process.exitCode=1;});
+})().catch(error=>{console.error('Email test failed:',gmailErrorMessage(error));process.exitCode=1;});

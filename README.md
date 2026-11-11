@@ -35,6 +35,12 @@ npm start
 
 **Security:** Keep `credentials.json`, `token.json`, `.env` and the `data` folder private. Never commit them to Git. Token refresh behavior for apps in Google OAuth **Testing** status may require periodic reauthorization (often after 7 days for external testing apps). For ongoing production use, configure an appropriate published OAuth app and follow Google's verification requirements.
 
+## Gmail error: invalid_grant
+
+Google has rejected the saved authorization token as expired or revoked. Double-click **Reconnect Gmail.cmd** (or run `npm run auth`), open the printed Google authorization URL, and sign in to the Gmail account used by the extractor. After the success message, run the extractor again. Reconnecting replaces only the saved authorization token; invoice results and the email checkpoint are kept. You do not need to delete `token.json` or reset the Gmail start time.
+
+If this keeps happening, check the OAuth app's publishing status in Google Cloud Console. External apps in **Testing** that request Gmail access receive refresh tokens that expire after seven days. Configure an appropriate production app for ongoing use, following [Google's OAuth requirements](https://developers.google.com/identity/protocols/oauth2#expiration). Tokens can also be revoked for other reasons; the error alone does not identify which reason applies.
+
 ## Choose previous or new results
 
 Double-click `Run Invoice Extractor.cmd` and choose:

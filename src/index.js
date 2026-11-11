@@ -1,7 +1,7 @@
 ﻿require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
-const { gmail, root } = require('./common');
+const { gmail, root, gmailErrorMessage } = require('./common');
 const { loadConfig, validateConfig } = require('./config');
 const { openStore } = require('./storage/store');
 const { runOnce, acquireRunLock, ensureCheckpoint } = require('./services/runOnceService');
@@ -48,5 +48,5 @@ async function start() {
     return summary;
   } finally { if (store) store.close(); unlock(); }
 }
-if (require.main === module) start().catch(e=>{ console.error(e.message); process.exitCode=1; });
+if (require.main === module) start().catch(e=>{ console.error(gmailErrorMessage(e)); process.exitCode=1; });
 module.exports = { start };
