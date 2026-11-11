@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
 const { invoiceIdentity } = require('./invoiceIdentity');
+const { combineInvoiceParts } = require('./combineInvoiceParts');
 
 const extraColumns = ['seller_name','seller_gstin','buyer_name','buyer_gstin','purchase_order_number','taxable_amount','cgst','sgst','igst','irn','document_type','validation_status','validation_json','parser_name','parser_version','reprocessed_at','received_at','attachment_source_id','attachment_part_id','normalized_invoice_number','source_run_id','structured_json'];
 const fieldMap = { invoice_number:'invoiceNumber', invoice_date:'invoiceDate', vendor_code:'vendorCode', total_amount:'totalAmount', seller_name:'sellerName', seller_gstin:'sellerGstin', buyer_name:'buyerName', buyer_gstin:'buyerGstin', purchase_order_number:'purchaseOrderNumber', taxable_amount:'taxableAmount', cgst:'cgst', sgst:'sgst', igst:'igst', irn:'irn' };
@@ -136,7 +137,7 @@ function openStore(dataDir) {
     const cols=['invoice_number','invoice_date','part_number','quantity','taxable_amount','IRN No','email_subject'];
     const concise=[];
     for (const row of rows.filter(r=>r.duplicate_of==null && (r.document_type==='TAX_INVOICE' || !r.document_type))) {
-      const items=db.prepare('SELECT part_number,quantity,taxable_amount FROM invoice_line_items WHERE invoice_id=? ORDER BY line_index').all(row.id);
+      const items=combineInvoiceParts(db.prepare('SELECT part_number,quantity,taxable_amount FROM invoice_line_items WHERE invoice_id=? ORDER BY line_index').all(row.id));
       // Retain a header row for unparsed/legacy invoices; never invent item quantities or amounts.
       for (const item of items.length?items:[{}]) concise.push({invoice_number:row.invoice_number,invoice_date:row.invoice_date,part_number:item.part_number,quantity:item.quantity==null?'':String(item.quantity).replace(/(\.\d*?[1-9])0+$|\.0+$/,'$1'),taxable_amount:item.taxable_amount,'IRN No':row.irn,email_subject:row.subject});
     }
