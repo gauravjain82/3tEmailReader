@@ -4,7 +4,7 @@ const Database = require('better-sqlite3');
 const { invoiceIdentity } = require('./invoiceIdentity');
 const { combineInvoiceParts } = require('./combineInvoiceParts');
 
-const extraColumns = ['seller_name','seller_gstin','buyer_name','buyer_gstin','purchase_order_number','taxable_amount','cgst','sgst','igst','irn','eway_bill_number','document_type','validation_status','validation_json','parser_name','parser_version','reprocessed_at','received_at','attachment_source_id','attachment_part_id','normalized_invoice_number','source_run_id','structured_json'];
+const extraColumns = ['seller_name','seller_gstin','buyer_name','buyer_gstin','purchase_order_number','taxable_amount','cgst','sgst','igst','irn','eway_bill_number','document_type','validation_status','validation_json','parser_name','parser_version','reprocessed_at','received_at','attachment_source_id','attachment_part_id','normalized_invoice_number','source_run_id','structured_json','archive_name','archive_entry'];
 const fieldMap = { invoice_number:'invoiceNumber', invoice_date:'invoiceDate', vendor_code:'vendorCode', total_amount:'totalAmount', seller_name:'sellerName', seller_gstin:'sellerGstin', buyer_name:'buyerName', buyer_gstin:'buyerGstin', purchase_order_number:'purchaseOrderNumber', taxable_amount:'taxableAmount', cgst:'cgst', sgst:'sgst', igst:'igst', irn:'irn', eway_bill_number:'ewayBillNumber' };
 function atomicWrite(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -90,7 +90,7 @@ function openStore(dataDir) {
     const claimed = number && db.prepare('SELECT invoice_id FROM invoice_numbers WHERE normalized_number=?').get(number);
     if (!old && claimed) {
       const jsonPath = meta.json_path || path.join(dataDir,'json',require('crypto').createHash('sha256').update(meta.gmail_id+':'+meta.attachment_key).digest('hex')+'.json');
-      const duplicate = { gmailMessageId:meta.gmail_id, attachmentKey:meta.attachment_key, gmailAttachmentId:meta.attachment_source_id || null, attachmentPartId:meta.attachment_part_id || null, from:meta.sender || null, subject:meta.subject || null, filename:meta.filename || null, sha256:meta.sha256 || null, pdfPath:meta.pdf_path || null, receivedAt:meta.received_at || null, processedAt:now, ...doc, normalizedInvoiceNumber:number, isDuplicate:true, duplicateOf:claimed.invoice_id };
+      const duplicate = { gmailMessageId:meta.gmail_id, attachmentKey:meta.attachment_key, gmailAttachmentId:meta.attachment_source_id || null, attachmentPartId:meta.attachment_part_id || null, from:meta.sender || null, subject:meta.subject || null, filename:meta.filename || null, archiveName:meta.archive_name || null, archiveEntry:meta.archive_entry || null, sha256:meta.sha256 || null, pdfPath:meta.pdf_path || null, receivedAt:meta.received_at || null, processedAt:now, ...doc, normalizedInvoiceNumber:number, isDuplicate:true, duplicateOf:claimed.invoice_id };
       const duplicateRow = { gmail_id:meta.gmail_id, attachment_key:meta.attachment_key, sender:meta.sender||null, subject:meta.subject||null, filename:meta.filename||null, sha256:meta.sha256||null, pdf_path:meta.pdf_path||null, json_path:jsonPath, received_at:meta.received_at||null, invoice_number:doc.invoiceNumber, normalized_invoice_number:number, invoice_id:claimed.invoice_id, validation_status:doc.validation.status, result_json:JSON.stringify(duplicate), detected_at:now };
       const cols=Object.keys(duplicateRow);
       db.prepare(`INSERT INTO duplicate_attachments (${cols.join(',')}) VALUES (${cols.map(c=>'@'+c).join(',')}) ON CONFLICT(gmail_id,attachment_key) DO UPDATE SET ${cols.filter(c=>!['gmail_id','attachment_key'].includes(c)).map(c=>`${c}=excluded.${c}`).join(',')}`).run(duplicateRow);
@@ -98,7 +98,7 @@ function openStore(dataDir) {
       return {id:claimed.invoice_id,duplicate_of:claimed.invoice_id,is_duplicate:true,validation_status:doc.validation.status};
     }
     const row = {};
-    for (const col of ['gmail_id','attachment_key','sender','subject','filename','sha256','pdf_path','received_at','attachment_source_id','attachment_part_id','source_run_id']) row[col] = old?.[col] ?? meta[col] ?? null;
+    for (const col of ['gmail_id','attachment_key','sender','subject','filename','sha256','pdf_path','received_at','attachment_source_id','attachment_part_id','source_run_id','archive_name','archive_entry']) row[col] = old?.[col] ?? meta[col] ?? null;
     if (old?.validation_status === 'FAILED' && meta.source_run_id) row.source_run_id = meta.source_run_id;
     row.processed_at = old?.processed_at || now;
     row.reprocessed_at = reprocess ? now : old?.reprocessed_at || null;
@@ -108,7 +108,7 @@ function openStore(dataDir) {
     }
     for (const [column, field] of Object.entries(fieldMap)) row[column] = doc[field] ?? null;
     Object.assign(row, { gstins_json: JSON.stringify(doc.gstins || []), part_numbers_json: JSON.stringify(doc.partNumbers || []), text_excerpt: doc.textExcerpt || old?.text_excerpt || '', document_type: doc.documentType, validation_status: doc.validation.status, validation_json: JSON.stringify(doc.validation), parser_name: doc.parserName, parser_version: doc.parserVersion, normalized_invoice_number:number, duplicate_of:claimed && claimed.invoice_id !== old?.id ? claimed.invoice_id : null });
-    const exported = { gmailMessageId: row.gmail_id, attachmentKey: row.attachment_key, gmailAttachmentId: row.attachment_source_id, attachmentPartId: row.attachment_part_id, from: row.sender, subject: row.subject, filename: row.filename, sha256: row.sha256, receivedAt: row.received_at, pdfPath: row.pdf_path, processedAt: row.processed_at, reprocessedAt: row.reprocessed_at, ...doc };
+    const exported = { gmailMessageId: row.gmail_id, attachmentKey: row.attachment_key, gmailAttachmentId: row.attachment_source_id, attachmentPartId: row.attachment_part_id, from: row.sender, subject: row.subject, filename: row.filename, archiveName: row.archive_name, archiveEntry: row.archive_entry, sha256: row.sha256, receivedAt: row.received_at, pdfPath: row.pdf_path, processedAt: row.processed_at, reprocessedAt: row.reprocessed_at, ...doc };
     row.structured_json = JSON.stringify(exported);
     if (old && !db.prepare('SELECT 1 FROM extraction_runs WHERE invoice_id=?').get(old.id)) db.prepare('INSERT INTO extraction_runs(invoice_id,processed_at,parser_version,validation_status,result_json) VALUES (?,?,?,?,?)').run(old.id, old.processed_at, old.parser_version || 'legacy', old.validation_status || 'UNREVIEWED', JSON.stringify(old));
     const cols = Object.keys(row);

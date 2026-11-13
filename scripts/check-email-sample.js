@@ -15,7 +15,7 @@ async function main(){
   try{
     for(const sender of config.allowedSenders){
       try{
-        const {data}=await withRetry(()=>api.users.messages.list({userId:'me',q:`from:${sender} has:attachment filename:pdf`,maxResults:10}));
+        const {data}=await withRetry(()=>api.users.messages.list({userId:'me',q:`from:${sender} has:attachment {filename:pdf filename:zip}`,maxResults:10}));
         const candidates=[];
         for(const {id} of data.messages||[]){
           const {data:m}=await withRetry(()=>api.users.messages.get({userId:'me',id,format:'metadata',metadataHeaders:['From']}));

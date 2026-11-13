@@ -1,6 +1,6 @@
 # Gmail PDF Extractor (Node.js)
 
-Runs once when you double-click `Run Invoice Extractor.cmd`: reads new Gmail PDF attachments from configured senders, extracts invoices, and writes JSON, CSV and SQLite. It exits after the batch; there is no background polling. No Gmail password required.
+Runs once when you double-click `Run Invoice Extractor.cmd`: reads new Gmail PDFs attached directly or inside ZIP attachments from configured senders, extracts invoices, and writes JSON, CSV and SQLite. It exits after the batch; there is no background polling. No Gmail password required.
 
 **New PC:** follow [SETUP.md](SETUP.md), then double-click **Setup.cmd** for guided installation/configuration and machine checks. Existing settings and invoice data are retained. To check readiness without installing anything, run `npm run setup:check`.
 
@@ -90,6 +90,12 @@ Printing uses [SumatraPDF's documented default-printer command](https://www.suma
 Printing uses SumatraPDF directly, with one first original-recipient page and one copy on the Windows default printer. No Adobe dialog, Python verifier, certificate chain or revocation check is involved. Existing `PRINT_ENGINE=adobe` and signature-related `.env` settings are ignored by printing; no settings migration is needed. Download SHA-256 checks and duplicate/uncertain-print protection remain enabled. Standalone signature diagnostic tools and older reports may remain on existing installations, but normal extraction, test runs and printing do not invoke them.
 
 ## Filtering
+
+PDFs in ZIP attachments use the same invoice parsers, e-way bill extraction, CSV grouping, invoice-number duplicate checks and original-PDF printing as direct PDF attachments. Folders inside a ZIP are supported. Extracted PDFs retain their exact bytes and are saved in `data/pdfs/`; JSON includes `archiveName` and `archiveEntry` for traceability. Same-named files use the normal collision handling. Other files and nested ZIPs inside an archive are ignored.
+
+ZIP processing is limited to 50 MB per archive, 25 MB per PDF, 200 MB of extracted PDFs, 1,000 archive entries and 200 PDFs per archive. Password-protected PDFs inside ZIPs, corrupt archives, checksum failures and exceeded limits appear in `failure-report.csv` and prevent the Gmail checkpoint from advancing. Successful entries are tracked separately, so a retry skips them. Password-protected archives need to be unpacked before emailing the PDFs directly.
+
+Normal runs, latest-email tests and sample checks search for both PDF and ZIP attachments. Existing `.env` filters containing `filename:pdf` automatically include ZIP files, and the existing checkpoint is retained. To read ZIP emails older than that checkpoint, use **Reset Gmail Start Time.cmd** and select the required start time. Run `npm install` after updating to install the ZIP reader dependency.
 Edit `config.json` to list the exact sender email addresses you want to process:
 
 ```json
@@ -111,7 +117,7 @@ Sender configurations have separate checkpoints. Changing `firstRunAfter` does n
 Optional `.env` settings add further Gmail restrictions; sender and time-window filters always apply:
 
 ```ini
-GMAIL_QUERY=in:inbox has:attachment filename:pdf
+GMAIL_QUERY=in:inbox has:attachment {filename:pdf filename:zip}
 PAGE_SIZE=50
 ```
 

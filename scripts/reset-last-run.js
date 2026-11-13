@@ -1,3 +1,4 @@
+const {DEFAULT_GMAIL_QUERY}=require('../src/gmail/attachmentTypes');
 const path=require('path');
 const readline=require('node:readline/promises');
 const {loadConfig}=require('../src/config');
@@ -26,7 +27,7 @@ async function main(){
     if(!['1','2'].includes(mode))throw Error('Choose 1 or 2. Start time unchanged.');
   }finally{prompt.close();}
   const since=parseResetTime(date,time);
-  resetCheckpoint({dataDir:path.join(root,'data'),config,since,replay:mode==='2',baseQuery:process.env.GMAIL_QUERY||'in:inbox has:attachment filename:pdf'});
+  resetCheckpoint({dataDir:path.join(root,'data'),config,since,replay:mode==='2',baseQuery:process.env.GMAIL_QUERY||DEFAULT_GMAIL_QUERY});
   console.log(`Gmail start time reset to ${date} ${time} IST.`);
   if(mode==='2')console.log('Replay is enabled for the next successful run. Previously processed attachments will be parsed again.');
   console.log('Now launch the invoice extractor and select Keep previous results.');

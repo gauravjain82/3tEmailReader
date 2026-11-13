@@ -1,3 +1,4 @@
+const {DEFAULT_GMAIL_QUERY}=require('../gmail/attachmentTypes');
 const crypto=require('crypto');
 const {validateConfig}=require('../config');
 const {validDate}=require('../pdf/validators/invoiceValidator');
@@ -14,7 +15,7 @@ function parseResetTime(date,time,now=Date.now()) {
   if(!Number.isSafeInteger(since)||since<0||since>Math.floor(now/1000))throw Error('Reset time must be after 1970 and cannot be in the future.');
   return since;
 }
-function resetCheckpoint({dataDir,config,baseQuery='in:inbox has:attachment filename:pdf',since,replay=false,now=Date.now()}) {
+function resetCheckpoint({dataDir,config,baseQuery=DEFAULT_GMAIL_QUERY,since,replay=false,now=Date.now()}) {
   config=validateConfig(config);
   if(!Number.isSafeInteger(since)||since<0||since>Math.floor(now/1000))throw Error('Invalid reset timestamp or future time.');
   const unlock=acquireRunLock(dataDir);let store;

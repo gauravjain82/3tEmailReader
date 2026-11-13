@@ -4,8 +4,9 @@ const { validateConfig } = require('../config');
 const { processMessage, withRetry } = require('../gmail/processMessage');
 const { atomicWrite } = require('../storage/store');
 const { acquireRunLock } = require('./runLock');
+const { DEFAULT_GMAIL_QUERY, includeZipAttachments, checkpointQuery } = require('../gmail/attachmentTypes');
 function checkpointKey(config, baseQuery) {
-  return 'gmail-run:' + crypto.createHash('sha256').update(JSON.stringify({senders:config.allowedSenders,baseQuery})).digest('hex');
+  return 'gmail-run:' + crypto.createHash('sha256').update(JSON.stringify({senders:config.allowedSenders,baseQuery:checkpointQuery(baseQuery)})).digest('hex');
 }
 function initialSince(store, config, until=Math.floor(Date.now()/1000)) {
   if (config.firstRunAfter != null) return config.firstRunAfter;
@@ -14,7 +15,7 @@ function initialSince(store, config, until=Math.floor(Date.now()/1000)) {
   return Math.max(0,until-24*60*60);
 }
 function buildQuery(baseQuery, senders, since, until) {
-  return `(${baseQuery}) {${senders.map(s=>'from:'+s).join(' ')}} after:${Math.max(0,since-1)} before:${until}`;
+  return `(${includeZipAttachments(baseQuery)}) {${senders.map(s=>'from:'+s).join(' ')}} after:${Math.max(0,since-1)} before:${until}`;
 }
 function ensureCheckpoint(store, config, baseQuery, until) {
   const key = checkpointKey(config,baseQuery);
@@ -29,7 +30,7 @@ function ensureCheckpoint(store, config, baseQuery, until) {
   if (!Number.isSafeInteger(since) || since < 0 || since > until) throw Error('Invalid saved run checkpoint or system clock.');
   return {key,since};
 }
-async function runOnce({api,store,dataDir,config,baseQuery='in:inbox has:attachment filename:pdf',pageSize=50,now=()=>Date.now(),handleMessage=processMessage}) {
+async function runOnce({api,store,dataDir,config,baseQuery=DEFAULT_GMAIL_QUERY,pageSize=50,now=()=>Date.now(),handleMessage=processMessage}) {
   config = validateConfig(config);
   const until = Math.floor(now()/1000);
   const {key,since} = ensureCheckpoint(store,config,baseQuery,until);

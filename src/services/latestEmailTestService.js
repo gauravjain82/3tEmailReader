@@ -7,10 +7,11 @@ const {openStore,atomicWrite}=require('../storage/store');
 const {saveOriginalInvoices}=require('./originalInvoiceService');
 const {printOriginalInvoices}=require('./printService');
 const {acquireRunLock}=require('./runLock');
+const {isSupportedAttachment}=require('../gmail/attachmentTypes');
 
 const header=(m,name)=>m.payload?.headers?.find(h=>h.name?.toLowerCase()===name)?.value||'';
 const parts=p=>[p,...(p.parts||[]).flatMap(parts)];
-const hasPdf=m=>parts(m.payload||{}).some(p=>p.mimeType==='application/pdf'||/\.pdf$/i.test(p.filename||''));
+const hasPdf=m=>parts(m.payload||{}).some(isSupportedAttachment);
 
 async function latestPdfEmail(api,sender) {
   const candidates=[];
@@ -18,7 +19,7 @@ async function latestPdfEmail(api,sender) {
   let pageToken;
   do {
     // No saved time window, firstRunAfter or last-run checkpoint is consulted.
-    const {data:page}=await withRetry(()=>api.users.messages.list({userId:'me',q:`from:${sender} has:attachment filename:pdf`,maxResults:100,pageToken}));
+    const {data:page}=await withRetry(()=>api.users.messages.list({userId:'me',q:`from:${sender} has:attachment {filename:pdf filename:zip}`,maxResults:100,pageToken}));
     const ids=(page.messages||[]).map(m=>m.id).filter(id=>{if(seen.has(id))return false;seen.add(id);return true;});
     // Compare Gmail's received times instead of relying on list ordering. Limit
     // concurrent metadata reads to five to avoid bursts against the user's quota.
@@ -67,9 +68,9 @@ async function testLatestEmails({api,projectRoot,config,log=console.log,print=fa
     for(const sender of allowedSenders) {
       const entry={sender,status:'SEARCHING'};report.emails.push(entry);save();
       try {
-        log('Finding latest PDF email from:',sender);
+        log('Finding latest PDF/ZIP email from:',sender);
         const message=await latestPdfEmail(api,sender);
-        if(!message){entry.status='NO_MATCH';log('No PDF email found:',sender);save();continue;}
+        if(!message){entry.status='NO_MATCH';log('No PDF/ZIP email found:',sender);save();continue;}
         Object.assign(entry,{gmailId:message.id,subject:header(message,'subject'),receivedAt:new Date(Number(message.internalDate)).toISOString(),status:'PROCESSING'});save();
         log('Selected:',entry.subject,'received',entry.receivedAt);
         const processing=await processMessage(api,message.id,store,outputDir,{allowedSenders:[sender],invoiceNumberFilenameSenders,exportAfter:false,runId});

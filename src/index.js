@@ -1,4 +1,5 @@
-﻿require('dotenv').config();
+const { DEFAULT_GMAIL_QUERY } = require('./gmail/attachmentTypes');
+require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const { gmail, root, gmailErrorMessage } = require('./common');
@@ -33,7 +34,7 @@ async function start() {
     }
     store = openStore(dataDir);
     const api = gmail();
-    const baseQuery = process.env.GMAIL_QUERY || 'in:inbox has:attachment filename:pdf';
+    const baseQuery = process.env.GMAIL_QUERY || DEFAULT_GMAIL_QUERY;
     if (mode === 'fresh') {
       // Establish the first-run boundary before clearing results; saved checkpoints stay intact.
       ensureCheckpoint(store,validateConfig(config),baseQuery,Math.floor(Date.now()/1000));

@@ -18,7 +18,7 @@ test('latest email selection checks exact From and received dates across all pag
   const messages={old:message('old','a@company.test',100,Buffer.from('pdf')),new:message('new','A Sender <A@company.test>',500,Buffer.from('pdf')),spoof:message('spoof','a@company.test <outsider@company.test>',900,Buffer.from('pdf'))};
   const calls=[];
   const api={users:{messages:{list:async args=>{
-    assert.equal(args.q,'from:a@company.test has:attachment filename:pdf');
+    assert.equal(args.q,'from:a@company.test has:attachment {filename:pdf filename:zip}');
     return {data:args.pageToken?{messages:[{id:'new'},{id:'spoof'}]}:{messages:[{id:'old'}],nextPageToken:'page2'}};
   },get:async args=>{calls.push(args);return {data:messages[args.id]};}}}};
   assert.equal((await latestPdfEmail(api,'a@company.test')).id,'new');

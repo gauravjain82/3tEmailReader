@@ -25,7 +25,8 @@
     "pdf-lib": "^1.17.1",
     "pdf-parse": "2.4.5",
     "pdfjs-dist": "5.4.296",
-    "tesseract.js": "7.0.0"
+    "tesseract.js": "7.0.0",
+    "yauzl": "3.4.0"
   },
   "engines": {
     "node": "22.x || 24.x"
