@@ -20,6 +20,25 @@ test('ZIP folders and upper-case PDF names are read without changing PDF bytes',
   const rows=await collect(bytes);assert.equal(rows.length,1);assert.equal(rows[0].filename,'invoice.PDF');assert.equal(rows[0].entryName,'folder/invoice.PDF');assert.deepEqual(rows[0].bytes,data);
 });
 
+test('invoice ZIP trailing NUL padding is accepted without changing extracted bytes',async()=>{
+  const data=await pdf('PAD001'),original=zipFixture([{name:'invoice.pdf',data}]);
+  for(const comment of [Buffer.alloc(0),Buffer.from('Exporter comment\0')]){
+    const zip=Buffer.from(original);zip.writeUInt16LE(comment.length,zip.length-2);
+    const padded=Buffer.concat([zip,comment,Buffer.alloc(153)]),before=Buffer.from(padded);
+    const rows=await collect(padded);assert.equal(rows.length,1);assert.deepEqual(rows[0].bytes,data);assert.deepEqual(padded,before);
+  }
+});
+
+test('ZIP padding compatibility still rejects nonzero trailers, truncation, directory errors and bad checksums',async()=>{
+  const zip=zipFixture([{name:'invoice.pdf',data:'PDF bytes'}]);
+  await assert.rejects(collect(Buffer.concat([zip,Buffer.from('unrecognized trailer')])));
+  const truncated=Buffer.from(zip);truncated.writeUInt16LE(200,truncated.length-2);
+  await assert.rejects(collect(Buffer.concat([truncated,Buffer.alloc(153)])));
+  const directory=Buffer.from(zip);directory.writeUInt32LE(1,directory.length-22+16);
+  await assert.rejects(collect(Buffer.concat([directory,Buffer.alloc(153)])));
+  await assert.rejects(collect(Buffer.concat([zipFixture([{name:'invoice.pdf',data:'PDF bytes',badCrc:true}]),Buffer.alloc(153)])),/checksum/);
+});
+
 test('bad, encrypted, unsafe and oversized ZIP entries fail with a reason',async()=>{
   await assert.rejects(collect(Buffer.from('not a zip')));
   for(const entry of [{name:'../escape.pdf',data:'pdf'},{name:'bad.pdf',data:'pdf',badCrc:true},{name:'locked.pdf',data:'pdf',encrypted:true},{name:'size.pdf',data:'pdf',size:1}])await assert.rejects(collect(zipFixture([entry])));

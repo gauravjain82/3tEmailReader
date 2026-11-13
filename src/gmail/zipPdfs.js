@@ -3,9 +3,34 @@ const { crc32 } = require('node:zlib');
 
 const ZIP_LIMITS = { archiveBytes: 50*1024*1024, pdfBytes: 25*1024*1024, totalBytes: 200*1024*1024, entries: 1000, pdfs: 200 };
 
+function withoutZeroPadding(bytes) {
+  // Some invoice exporters append NUL padding after the complete ZIP footer.
+  // Only accept a single-disk footer whose central directory ends exactly here.
+  for (let offset=bytes.length-22; offset>=Math.max(0,bytes.length-65557); offset--) {
+    if (bytes.readUInt32LE(offset)!==0x06054b50) continue;
+    const end=offset+22+bytes.readUInt16LE(offset+20);
+    if (end>=bytes.length || bytes.readUInt16LE(offset+4)!==0 || bytes.readUInt16LE(offset+6)!==0) continue;
+    if (bytes.readUInt16LE(offset+8)!==bytes.readUInt16LE(offset+10)) continue;
+    if (bytes.readUInt32LE(offset+16)+bytes.readUInt32LE(offset+12)!==offset) continue;
+    if (bytes.subarray(end).every(value=>value===0)) return bytes.subarray(0,end);
+  }
+  return null;
+}
+
+async function openZip(bytes) {
+  const options={lazyEntries:true,validateEntrySizes:true};
+  try { return await yauzl.fromBufferPromise(bytes,options); }
+  catch (error) {
+    if (!/^Invalid comment length\./.test(error.message)) throw error;
+    const trimmed=withoutZeroPadding(bytes);
+    if (!trimmed) throw error;
+    return yauzl.fromBufferPromise(trimmed,options);
+  }
+}
+
 async function* zipPdfs(bytes, limits = ZIP_LIMITS) {
   if (bytes.length > limits.archiveBytes) throw Error('ZIP attachment exceeds the 50 MB archive limit');
-  const zip = await yauzl.fromBufferPromise(bytes, { lazyEntries: true, validateEntrySizes: true });
+  const zip = await openZip(bytes);
   let index = 0, count = 0, total = 0;
   try {
     if (zip.entryCount > limits.entries) throw Error('ZIP contains too many entries');

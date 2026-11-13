@@ -95,6 +95,8 @@ PDFs in ZIP attachments use the same invoice parsers, e-way bill extraction, CSV
 
 ZIP processing is limited to 50 MB per archive, 25 MB per PDF, 200 MB of extracted PDFs, 1,000 archive entries and 200 PDFs per archive. Password-protected PDFs inside ZIPs, corrupt archives, checksum failures and exceeded limits appear in `failure-report.csv` and prevent the Gmail checkpoint from advancing. Successful entries are tracked separately, so a retry skips them. Password-protected archives need to be unpacked before emailing the PDFs directly.
 
+Some invoice exporters append zero padding after a complete ZIP end record. The reader accepts that padding only when the end record and central-directory boundaries agree; extracted PDF size and checksum checks still apply. Other unexpected trailing data and truncated archives remain errors.
+
 Normal runs, latest-email tests and sample checks search for both PDF and ZIP attachments. Existing `.env` filters containing `filename:pdf` automatically include ZIP files, and the existing checkpoint is retained. To read ZIP emails older than that checkpoint, use **Reset Gmail Start Time.cmd** and select the required start time. Run `npm install` after updating to install the ZIP reader dependency.
 Edit `config.json` to list the exact sender email addresses you want to process:
 
