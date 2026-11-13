@@ -14,7 +14,14 @@ function mahleMultiLineItems(text,parts) {
   if(!table||!identity)return [];
   const lines=value=>value.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
   const [serials,quantities,prices,taxableAndRates,cgstAmounts,remaining]=table.slice(1).map(lines);
-  const [hsns,units,descriptions]=identity.slice(1).map(lines),n=serials.length;
+  const [hsns,units,descriptionLines]=identity.slice(1).map(lines),n=serials.length;
+  // These templates wrap the camshaft direction below the description. It is
+  // part of the same item, not another row. Leave other ambiguous wraps unsupported.
+  const descriptions=[];
+  for(const line of descriptionLines){
+    if(/^(?:INTAKE|EXHAUST|\((?:INTAKE|EXHAUST)\))$/i.test(line) && /^CAMSHAFT\b/i.test(descriptions.at(-1)||'') && !/\b(?:INTAKE|EXHAUST)\)?$/i.test(descriptions.at(-1))) descriptions[descriptions.length-1]+=' '+line;
+    else descriptions.push(line);
+  }
   if(n<2||n!==parts.length||new Set(serials).size!==n||!serials.every(s=>/^\d{1,4}$/.test(s)&&Number(s)>0))return [];
   if([quantities,prices,cgstAmounts,hsns,units,descriptions].some(column=>column.length!==n)||taxableAndRates.length!==2*n||remaining.length!==4*n)return [];
   const numeric=[...quantities,...prices,...taxableAndRates,...cgstAmounts,...remaining];

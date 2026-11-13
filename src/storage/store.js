@@ -4,8 +4,8 @@ const Database = require('better-sqlite3');
 const { invoiceIdentity } = require('./invoiceIdentity');
 const { combineInvoiceParts } = require('./combineInvoiceParts');
 
-const extraColumns = ['seller_name','seller_gstin','buyer_name','buyer_gstin','purchase_order_number','taxable_amount','cgst','sgst','igst','irn','document_type','validation_status','validation_json','parser_name','parser_version','reprocessed_at','received_at','attachment_source_id','attachment_part_id','normalized_invoice_number','source_run_id','structured_json'];
-const fieldMap = { invoice_number:'invoiceNumber', invoice_date:'invoiceDate', vendor_code:'vendorCode', total_amount:'totalAmount', seller_name:'sellerName', seller_gstin:'sellerGstin', buyer_name:'buyerName', buyer_gstin:'buyerGstin', purchase_order_number:'purchaseOrderNumber', taxable_amount:'taxableAmount', cgst:'cgst', sgst:'sgst', igst:'igst', irn:'irn' };
+const extraColumns = ['seller_name','seller_gstin','buyer_name','buyer_gstin','purchase_order_number','taxable_amount','cgst','sgst','igst','irn','eway_bill_number','document_type','validation_status','validation_json','parser_name','parser_version','reprocessed_at','received_at','attachment_source_id','attachment_part_id','normalized_invoice_number','source_run_id','structured_json'];
+const fieldMap = { invoice_number:'invoiceNumber', invoice_date:'invoiceDate', vendor_code:'vendorCode', total_amount:'totalAmount', seller_name:'sellerName', seller_gstin:'sellerGstin', buyer_name:'buyerName', buyer_gstin:'buyerGstin', purchase_order_number:'purchaseOrderNumber', taxable_amount:'taxableAmount', cgst:'cgst', sgst:'sgst', igst:'igst', irn:'irn', eway_bill_number:'ewayBillNumber' };
 function atomicWrite(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const temp = file + '.tmp';
@@ -72,6 +72,7 @@ function openStore(dataDir) {
     // Keep historical records and explicitly flag any retained values. A parser regression must not erase data.
     const retained = [];
     for (const [column, field] of Object.entries(fieldMap)) {
+      if (field === 'ewayBillNumber' && doc.ewayBillCandidates?.length > 1) continue;
       if ((doc[field] == null || doc[field] === '') && old?.[column]) { doc[field] = old[column]; retained.push(field); }
     }
     for (const [column, field] of [['gstins_json','gstins'],['part_numbers_json','partNumbers']]) {
@@ -134,12 +135,12 @@ function openStore(dataDir) {
     for (const row of rows) if (row.structured_json) atomicWrite(row.json_path, JSON.stringify({...JSON.parse(row.structured_json),normalizedInvoiceNumber:row.normalized_invoice_number,isDuplicate:row.duplicate_of != null,duplicateOf:row.duplicate_of}, null, 2));
     const duplicates = db.prepare('SELECT * FROM duplicate_attachments ORDER BY id').all();
     for (const row of duplicates) atomicWrite(row.json_path,JSON.stringify({...JSON.parse(row.result_json),duplicateOf:row.invoice_id},null,2));
-    const cols=['invoice_number','invoice_date','part_number','quantity','taxable_amount','IRN No','email_subject'];
+    const cols=['invoice_number','invoice_date','part_number','quantity','taxable_amount','IRN No','email_subject','E-Way Bill No'];
     const concise=[];
     for (const row of rows.filter(r=>r.duplicate_of==null && (r.document_type==='TAX_INVOICE' || !r.document_type))) {
       const items=combineInvoiceParts(db.prepare('SELECT part_number,quantity,taxable_amount FROM invoice_line_items WHERE invoice_id=? ORDER BY line_index').all(row.id));
       // Retain a header row for unparsed/legacy invoices; never invent item quantities or amounts.
-      for (const item of items.length?items:[{}]) concise.push({invoice_number:row.invoice_number,invoice_date:row.invoice_date,part_number:item.part_number,quantity:item.quantity==null?'':String(item.quantity).replace(/(\.\d*?[1-9])0+$|\.0+$/,'$1'),taxable_amount:item.taxable_amount,'IRN No':row.irn,email_subject:row.subject});
+      for (const item of items.length?items:[{}]) concise.push({invoice_number:row.invoice_number,invoice_date:row.invoice_date,part_number:item.part_number,quantity:item.quantity==null?'':String(item.quantity).replace(/(\.\d*?[1-9])0+$|\.0+$/,'$1'),taxable_amount:item.taxable_amount,'IRN No':row.irn,email_subject:row.subject,'E-Way Bill No':row.eway_bill_number});
     }
     atomicWrite(path.join(dataDir,'invoices.csv'),[cols.join(','),...concise.map(r=>cols.map(c=>csvCell(r[c])).join(','))].join('\r\n')+'\r\n');
     const duplicateColumns = ['gmail_id','attachment_key','sender','subject','filename','sha256','invoice_number','normalized_invoice_number','duplicate_of','validation_status','pdf_path','json_path','processed_at'];

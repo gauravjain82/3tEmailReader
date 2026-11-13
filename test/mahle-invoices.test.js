@@ -76,6 +76,17 @@ test('MAHLE multi-row parsing rejects incomplete columns and unsupported wrapped
   }
 });
 
+test('MAHLE wrapped camshaft direction belongs to the existing item row',()=>{
+  for(const direction of ['(INTAKE)','EXHAUST']){
+    const description='CAMSHAFT CASTING K12VVT';
+    const doc=processText(multiRowFixture({descriptions:[description,direction,description,direction]}));
+    assert.equal(doc.validation.status,'VALIDATED',JSON.stringify(doc.validation.issues));
+    assert.equal(doc.lineItems.length,2);
+    assert.deepEqual(doc.lineItems.map(i=>i.description),[description+' '+direction,description+' '+direction]);
+    assert.deepEqual(doc.lineItems.map(i=>i.quantity),['2.000000','1.000000']);
+  }
+});
+
 test('multi-row financial mismatches remain visible instead of adjusting PDF values to force validation',()=>{
   const doc=processText(multiRowFixture({quantities:['3','1']}));assert.equal(doc.lineItems[0].quantity,'3.000000');
   assert.equal(doc.validation.status,'NEEDS_REVIEW');assert.ok(doc.validation.issues.some(i=>i.field==='lineItems.0'));

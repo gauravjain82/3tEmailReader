@@ -13,6 +13,7 @@ function validateInvoice(doc) {
   if (!doc.invoiceNumber || !/\d/.test(doc.invoiceNumber)) issue('invoiceNumber', 'Missing or invalid invoice number');
   if (!validDate(doc.invoiceDate)) issue('invoiceDate', 'Missing or invalid calendar date');
   if (doc.irnCandidates?.length>1) issue('irn', 'Conflicting IRN values in the PDF require review');
+  if (doc.ewayBillCandidates?.length>1) issue('ewayBillNumber', 'Conflicting e-way bill numbers in the PDF require review');
   for (const field of ['sellerGstin', 'buyerGstin']) {
     if (!validateGstin(doc[field])) issue(field, 'Missing GSTIN or invalid structure/state/checksum');
     else checks.push(`${field}: structure, state and checksum passed`);

@@ -1,6 +1,7 @@
 const { gstins } = require('../validators/gstinValidator');
 const { decimal } = require('../decimal');
 const { extractIrn } = require('../extractIrn');
+const { extractEwayBill } = require('../extractEwayBill');
 const first = (text, re) => text.match(re)?.[1]?.trim() || null;
 function identifier(value) {
   return value && /\d/.test(value) && /^[A-Z0-9][A-Z0-9/()._-]{0,39}$/i.test(value) ? value : null;
@@ -16,6 +17,7 @@ function genericInvoiceParser(text) {
   const rawDate = first(text, /(?:invoice\s*(?:date|dt\.?)|bill\s*date)[ \t:]*([^\n\t]+)/i);
   return {
     ...extractIrn(text),
+    ...extractEwayBill(text),
     invoiceNumber: identifier(first(text, /(?:invoice\s*(?:no\.?|number|#)|bill\s*(?:no\.?|number))[ \t:#-]*([A-Z0-9/_.-]+)/i)),
     invoiceDate: date(rawDate), rawInvoiceDate: rawDate,
     sellerName: null, sellerGstin: null, buyerName: null, buyerGstin: null,
