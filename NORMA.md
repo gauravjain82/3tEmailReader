@@ -1,0 +1,94 @@
+# Norma invoice and daily stock service
+
+This service runs separately from Gmail extraction and rejection parsing. It reads only local Norma PDFs and the configured Excel workbook. It does not use Gmail credentials, the main invoice database, Gmail checkpoints or printers.
+
+## Run
+
+1. Run `npm install` after updating the application.
+2. Copy `norma/config.example.json` to `norma/config.json` if needed. The launcher creates this configuration on its first run if absent.
+3. Put your three-sheet stock workbook at `norma/Norma stock.xlsx`, or change `workbookPath` to its actual location.
+4. Drop PDFs into `norma/Pending`. Close the stock workbook in Excel.
+5. Double-click **Run Norma Parser.cmd**, or run `npm run norma`.
+
+The service reads the top-level PDF files in Pending once and exits. A PDF goes to Done only after its invoice records and stock changes are saved, or after verifying that the same records already exist. Invalid, conflicting, unsupported or unsaved files remain in Pending, with their reasons in the dated JSON report under `norma/Reports`. Other PDFs in the batch can still succeed. The original PDF bytes, including signatures, remain unchanged.
+
+The installation prepared during development has a local copy of the supplied stock workbook at `norma/Norma stock.xlsx`. The original workbook in Downloads is unchanged. These local business files are ignored by Git and are not included when pulling the code onto another PC; supply that PC's workbook and config separately.
+
+## Configurable paths
+
+All paths in `norma/config.json` can be absolute Windows paths or relative to that configuration file. For example:
+
+```json
+{
+  "pendingDirectory": "D:/Norma/Pending",
+  "doneDirectory": "D:/Norma/Done",
+  "workbookPath": "D:/Norma/norma stock sheet.xlsx",
+  "backupDirectory": "D:/Norma/Backups",
+  "reportDirectory": "D:/Norma/Reports",
+  "openingBalances": { "gurgaon": {}, "gujarat": {} }
+}
+```
+
+Pending and Done must be separate, non-nested folders. Keep the workbook outside both. To use another configuration:
+
+```powershell
+npm run norma -- --config "D:/Norma/config.json"
+```
+
+Each run updates stock through today's date in India Standard Time. For a controlled historical run, specify its through-date:
+
+```powershell
+npm run norma -- --config "D:/Norma/config.json" --date 2026-11-15
+```
+
+Invoices dated after that through-date remain in Pending. Run the service daily, including days without new PDFs, to create daily stock rows and refresh the current day's dispatch totals.
+
+## Sales sheets
+
+The workbook must contain these exact names and the supplied column headings:
+
+| Sheet | Routing |
+|---|---|
+| Norma sales report Smg | Ahmedabad/Gujarat ship-to; Plant = SMG |
+| Norma sales report Ggn. | Gurgaon, Manesar and Kharkhoda ship-to |
+| STOCK DETAILS | Separate Gurgaon and Gujarat daily balances |
+
+Routing uses customer codes checked against the **ship-to** destination; the seller's Gurgaon address does not determine the destination. Recognised sample customers map to MSILG, MSILG SPD, MSILM, MSILM OES, MSILK and SMG. Other customers need an unambiguous supported ship-to location. Unknown or conflicting locations stay in Pending.
+
+The customer part number, quantity, basic rate, printed assessable value, taxes and grand total come from each PDF item. S.NO continues the existing sequence. BILL DATE is an Excel date. Srv No. is blank, as requested; Ahmedabad REMARKS is also blank because the samples do not supply a report-specific remark. The Gurgaon sheet receives CGST and SGST; the Ahmedabad sheet receives IGST.
+
+Original buyer pages are used once per invoice. Transporter, supplier and extra copies do not multiply sales or stock. An identical invoice already in the workbook is verified and skipped. A conflicting date, destination, part, quantity, rate or amount leaves the PDF in Pending. Existing workbook money values can differ by up to two paise because older rows use unrounded Excel calculations; existing figures are preserved. New rows use the PDF's printed amounts. Unrelated workbook entries, styles, merges and existing sales formulas are retained. Excel rebuilds its calculation chain when the updated workbook opens.
+
+## Daily stock
+
+Dispatches are **replaced with the total for that date and part from the corresponding sales sheet**, rather than incremented on each run. Repeating a run therefore does not subtract the same invoice again.
+
+| Region | Closing balance |
+|---|---|
+| Gurgaon | Opening + received quantity − Gurgaon-to-SMG transfer − Gurgaon/Manesar/Kharkhoda customer dispatch |
+| Gujarat | Opening + received quantity − Ahmedabad customer dispatch |
+
+Opening references the previous available closing balance for that part. Newly encountered stock parts start at zero, as requested. You can set a nonzero initial opening in `openingBalances.gurgaon` or `openingBalances.gujarat` before that part first appears. Receipts, transfers and the Gujarat Transit column remain manual; a transfer does not automatically become a Gujarat receipt. Negative balances are recorded in the report for review and are not silently adjusted.
+
+New daily blocks cover every calendar day through the processing date. Adding an older invoice recalculates its dispatch day and following days; openings then follow the preceding closing balances. Manual receipts and transfers remain intact. Historic opening resets can consequently change when an older day is reprocessed. Historical blocks outside the affected date range are preserved. New parts are inserted into available blank rows of an existing block; if it has no free row, add a blank row in Excel and retry. Ambiguous repeated date headings in an affected stock block must be corrected in Excel. The supplied workbook has some old repeated headings; unchanged old blocks are not rewritten. A run refuses to generate more than 370 days of missing stock blocks at once.
+
+## Backups and interrupted runs
+
+The service locks its workbook against simultaneous Norma runs, writes and validates a complete temporary workbook, backs up the previous workbook, then replaces it in place. The original remains intact if parsing, validation or saving fails. Close Excel before starting; an Excel owner lock or a concurrent workbook change prevents replacement.
+
+After a successful workbook save, the PDF is copied unchanged to Done and removed from Pending. If the move fails or the process stops between saving and moving, retry: the workbook itself is checked for existing invoices, so sales and dispatches are not duplicated. Different PDFs with the same filename receive numbered names in Done. Never delete a `.norma.lock` file while its run is still active; after a crashed run, verify that no Norma process is running before removing the stale lock.
+
+## Supplied sample verification
+
+All six provided PDFs parse with matching item quantities, prices, taxes and totals. Each PDF contains repeated copies of a single invoice. All six invoice numbers already exist in the supplied workbook, so processing them against that workbook verifies the entries and adds no duplicate sales rows.
+
+| Sample | Invoice | Plant | Customer part | Quantity |
+|---|---|---|---|---:|
+| GGN.pdf | 2620008781 | MSILG | 13892M74L60 | 250 |
+| GGN SPD.pdf | 2620008716 | MSILG SPD | 18526M86J20 | 400 |
+| MNSR V.pdf | 2620008793 | MSILM | 13892M74L60 | 250 |
+| MNSR OES.pdf | 2620008117 | MSILM OES | 13893M74L60 | 500 |
+| MSILK.pdf | 2620008806 | MSILK | 13894M74L60 | 500 |
+| SMG.pdf | 2620008775 | SMG | 13892M74L60 | 1500 |
+
+The parser currently supports the supplied text-based Norma layout. Scanned/image-only invoices, changed table order, ambiguous multi-page item continuations and mismatched financial totals stay in Pending for review. No paid OCR or cloud service is used.

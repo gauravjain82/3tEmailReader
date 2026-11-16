@@ -1,0 +1,8 @@
+{
+  "pendingDirectory": "Pending",
+  "doneDirectory": "Done",
+  "workbookPath": "Norma stock.xlsx",
+  "backupDirectory": "Backups",
+  "reportDirectory": "Reports",
+  "openingBalances": { "gurgaon": {}, "gujarat": {} }
+}

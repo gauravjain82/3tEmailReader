@@ -15,12 +15,15 @@
     "verify:local": "node scripts/verify-local.js",
     "rejections": "node scripts/parse-rejections.js",
     "handwriting:test": "node scripts/test-handwriting.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "norma": "node src/norma/service.js"
   },
   "dependencies": {
     "@tesseract.js-data/eng": "1.0.0",
+    "@xmldom/xmldom": "0.9.12",
     "better-sqlite3": "12.11.1",
     "dotenv": "^16.4.7",
+    "fflate": "0.8.3",
     "googleapis": "^144.0.0",
     "pdf-lib": "^1.17.1",
     "pdf-parse": "2.4.5",

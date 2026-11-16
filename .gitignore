@@ -1,4 +1,11 @@
 node_modules/
+/norma/config.json
+/norma/*.xlsx
+/norma/Pending/
+/norma/Done/
+/norma/Backups/
+/norma/Reports/
+/norma/*.lock
 .env
 credentials.json
 token.json
