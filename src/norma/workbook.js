@@ -47,7 +47,7 @@ function stockCalculator(sheet){
 }
 const nextDay=date=>new Date(Date.parse(date+'T00:00:00Z')+86400000).toISOString().slice(0,10);
 function syncStock(book,{affected={gurgaon:[],gujarat:[]},throughDate,extraParts=[],openingBalances={}}){
-  if(!validDate(throughDate))throw Error('Invalid Norma stock through-date');const sheet=book.sheet(SHEETS.stock),result={createdDays:0,updatedDays:0,warnings:[]};const newTitles=new Map();
+  if(!validDate(throughDate))throw Error('Invalid Norma stock through-date');const sheet=book.sheet(SHEETS.stock),result={createdDays:0,updatedDays:0,warnings:[]};const newTitles=new Map(),updatedDates=new Set();
   // Reserve enough vertical space for either side before arranging new days.
   const possibleParts=new Set(extraParts);for(const [ref] of sheet.cells)if(/^(?:B|J)\d+$/.test(ref)&&partPattern.test(sheet.value(ref)))possibleParts.add(sheet.value(ref));for(const region of ['gurgaon','gujarat'])for(const row of salesRows(book,region))possibleParts.add(row.part);
   const blockHeight=possibleParts.size+4;let nextTitle=sheet.maxRow()+2;
@@ -74,6 +74,25 @@ function syncStock(book,{affected={gurgaon:[],gujarat:[]},throughDate,extraParts
         if(balance<0n)result.warnings.push(`${region} ${date} ${part}: negative closing stock ${quantity(balance)}`);
       }
       result.updatedDays++;
+      updatedDates.add(date);
+    }
+  }
+  // Format complete rectangles, including empty manual-entry cells. Copying
+  // only populated cells leaves broken borders and an unbordered Transit column.
+  const layouts={gurgaon:{start:65,end:71,part:'B'},gujarat:{start:73,end:79,part:'J'}};
+  const blocksByRegion=Object.fromEntries(['gurgaon','gujarat'].map(region=>[region,stockBlocks(sheet,region)]));
+  for(const date of updatedDates){
+    const left=blocksByRegion.gurgaon.find(b=>b.date===date),right=blocksByRegion.gujarat.find(b=>b.date===date);
+    const aligned=left&&right&&left.title===right.title;
+    const alignedEnd=aligned?Math.max(left.title+2,...left.parts.values(),...right.parts.values()):null;
+    for(const region of ['gurgaon','gujarat']){
+      const block=blocksByRegion[region].find(b=>b.date===date);if(!block)continue;
+      const layout=layouts[region],last=alignedEnd??Math.max(block.title+2,...block.parts.values());
+      for(let code=layout.start;code<=layout.end;code++){
+        const col=String.fromCharCode(code),template=col==='O'?'N':col;
+        sheet.copyStyle(col+(block.title+1),template+'2',layout.part+'2');
+        for(let row=block.title+2;row<=last;row++)sheet.copyStyle(col+row,template+'3',layout.part+'3');
+      }
     }
   }
   return result;

@@ -12,6 +12,8 @@ This service runs separately from Gmail extraction and rejection parsing. It rea
 
 The service reads the top-level PDF files in Pending once and exits. A PDF goes to Done only after its invoice records and stock changes are saved, or after verifying that the same records already exist. Invalid, conflicting, unsupported or unsaved files remain in Pending, with their reasons in the dated JSON report under `norma/Reports`. Other PDFs in the batch can still succeed. The original PDF bytes, including signatures, remain unchanged.
 
+The run window prints the exact workbook path and each invoice's sheet and row numbers. Newly added invoice rows inherit date/number formatting even when empty formatted rows already exist. The saved workbook opens on the updated sales sheet with a new invoice selected. For Ahmedabad invoices, look in **Norma sales report Smg**. If the workbook you opened looks empty, compare its full path with **Norma workbook output** in the run window.
+
 The installation prepared during development has a local copy of the supplied stock workbook at `norma/Norma stock.xlsx`. The original workbook in Downloads is unchanged. These local business files are ignored by Git and are not included when pulling the code onto another PC; supply that PC's workbook and config separately.
 
 ## Configurable paths
@@ -69,6 +71,8 @@ Dispatches are **replaced with the total for that date and part from the corresp
 | Gujarat | Opening + received quantity − Ahmedabad customer dispatch |
 
 Opening references the previous available closing balance for that part. Newly encountered stock parts start at zero, as requested. You can set a nonzero initial opening in `openingBalances.gurgaon` or `openingBalances.gujarat` before that part first appears. Receipts, transfers and the Gujarat Transit column remain manual; a transfer does not automatically become a Gujarat receipt. Negative balances are recorded in the report for review and are not silently adjusted.
+
+Stock tables have complete cell borders, including blank receipts, transfer and Transit cells. Existing manual values and formulas are preserved when applying those borders. Normal runs update `workbookPath` in place; dated files in Backups are recovery copies, not a different active workbook.
 
 New daily blocks cover every calendar day through the processing date. Adding an older invoice recalculates its dispatch day and following days; openings then follow the preceding closing balances. Manual receipts and transfers remain intact. Historic opening resets can consequently change when an older day is reprocessed. Historical blocks outside the affected date range are preserved. New parts are inserted into available blank rows of an existing block; if it has no free row, add a blank row in Excel and retry. Ambiguous repeated date headings in an affected stock block must be corrected in Excel. The supplied workbook has some old repeated headings; unchanged old blocks are not rewritten. A run refuses to generate more than 370 days of missing stock blocks at once.
 

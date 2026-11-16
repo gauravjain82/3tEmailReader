@@ -1,10 +1,41 @@
 const {test}=require('node:test');const assert=require('node:assert/strict');const fs=require('fs'),os=require('os'),path=require('path');
 const {normaWorkbook,normaText}=require('./helpers/normaFixture');
-const {parseNormaText,parseNormaPdf}=require('../src/norma/parser');const {Workbook}=require('../src/norma/xlsx');
+const {parseNormaText,parseNormaPdf}=require('../src/norma/parser');const {Workbook,NS,elements}=require('../src/norma/xlsx');
 const {addInvoice,syncStock,salesRows,stockBlocks,checkHeaders}=require('../src/norma/workbook');
 const {runNorma,loadConfig}=require('../src/norma/service');
 function fixture(t){const root=fs.mkdtempSync(path.join(os.tmpdir(),'norma-test-'));const config={workbookPath:path.join(root,'stock.xlsx'),pendingDirectory:path.join(root,'Pending'),doneDirectory:path.join(root,'Done'),backupDirectory:path.join(root,'Backups'),reportDirectory:path.join(root,'Reports')};fs.writeFileSync(config.workbookPath,normaWorkbook());fs.mkdirSync(config.pendingDirectory);t.after(()=>{assert.equal(path.dirname(root),path.resolve(os.tmpdir()));assert.ok(path.basename(root).startsWith('norma-test-'));fs.rmSync(root,{recursive:true,force:true});});return {root,config};}
 const invoice=()=>parseNormaText(normaText())[0];
+
+test('new sales rows inherit date formatting even when styled blank cells already exist',()=>{
+  const book=new Workbook(normaWorkbook());addInvoice(book,invoice());const sheet=book.sheet('Norma sales report Ggn.');sheet.cells.get('C2').setAttribute('s','13');
+  sheet.number('C3',0);sheet.set('C3','');sheet.cells.get('C3').setAttribute('s','8');
+  addInvoice(book,{...invoice(),invoiceNumber:'2620009999'});
+  const saved=new Workbook(book.pack()).sheet('Norma sales report Ggn.');assert.equal(saved.value('C3'),String(book.serial('2026-11-10')));assert.equal(saved.cells.get('C3').getAttribute('s'),'13');assert.equal(saved.value('B3'),'2620009999');
+});
+
+test('saved workbook opens on the updated sheet with the new invoice row selected',()=>{
+  for(const frozen of [false,true]){
+    const book=new Workbook(normaWorkbook()),views=book.doc.createElementNS(NS,'bookViews'),view=book.doc.createElementNS(NS,'workbookView');view.setAttribute('activeTab','2');views.appendChild(view);book.doc.documentElement.insertBefore(views,elements(book.doc,'sheets')[0]);
+    for(const sheet of book.sheets.values()){const views=sheet.doc.createElementNS(NS,'sheetViews'),view=sheet.doc.createElementNS(NS,'sheetView');view.setAttribute('workbookViewId','0');view.setAttribute('tabSelected','1');if(frozen){const pane=sheet.doc.createElementNS(NS,'pane');pane.setAttribute('state','frozen');pane.setAttribute('ySplit','1');view.appendChild(pane);const selected=sheet.doc.createElementNS(NS,'selection');selected.setAttribute('pane','bottomLeft');view.appendChild(selected);}views.appendChild(view);sheet.doc.documentElement.insertBefore(views,sheet.data);}
+    book.focus('Norma sales report Smg',2565);const saved=new Workbook(book.pack());assert.equal(elements(saved.doc,'workbookView')[0].getAttribute('activeTab'),'1');const sheet=saved.sheet('Norma sales report Smg'),selectedView=elements(sheet.doc,'sheetView')[0];assert.equal(selectedView.getAttribute('tabSelected'),'1');assert.equal(elements(sheet.doc,'selection')[0].getAttribute('activeCell'),'B2565');assert.equal((frozen?elements(sheet.doc,'pane')[0]:selectedView).getAttribute('topLeftCell'),'A2555');assert.notEqual(elements(saved.sheet('Norma sales report Ggn.').doc,'sheetView')[0].getAttribute('tabSelected'),'1');
+  }
+});
+
+test('complete stock tables have borders on empty receipts, transfers and Transit cells',()=>{
+  const book=new Workbook(normaWorkbook());syncStock(book,{throughDate:'2026-11-10',extraParts:['13893M74L60']});
+  const saved=new Workbook(book.pack()),sheet=saved.sheet('STOCK DETAILS');
+  for(const region of ['gurgaon','gujarat']){
+    const block=stockBlocks(sheet,region).find(b=>b.date==='2026-11-10');
+    const first=region==='gurgaon'?65:73,last=region==='gurgaon'?71:79;
+    for(let col=first;col<=last;col++){
+      const letter=String.fromCharCode(col);assert.equal(sheet.cells.get(letter+(block.title+1)).getAttribute('s'),'2');
+      for(const row of block.parts.values())assert.equal(sheet.cells.get(letter+row).getAttribute('s'),'1');
+    }
+    for(const row of block.parts.values())for(const col of region==='gurgaon'?['D','E']:['L','O'])assert.equal(sheet.value(col+row),'');
+  }
+  assert.equal(sheet.value('D3'),'100');assert.equal(sheet.value('E3'),'50');assert.equal(sheet.value('O3'),'500');
+  assert.equal(sheet.cells.has('H'+stockBlocks(sheet,'gurgaon').find(b=>b.date==='2026-11-10').title),false);
+});
 
 test('Norma parser validates real printed amounts, ignores copies and rejects uncertain tables',()=>{
   const text=normaText();assert.equal(parseNormaText(text+'\n'+text.replace('ORIGINAL FOR BUYER','DUPLICATE FOR TRANSPORTER')).length,1);

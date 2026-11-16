@@ -14,11 +14,14 @@ class Sheet{
   formula(ref){return elements(this.cells.get(ref)||this.doc.createElement('empty'),'f')[0]?.textContent||'';}
   maxRow(){return Math.max(0,...this.rows.keys());}
   set(ref,value,{styleFrom,formula}={}){
-    const old=this.cells.get(ref);if((formula||'')===this.formula(ref)&&this.value(ref)===String(value??''))return;
+    const old=this.cells.get(ref),wasBlank=this.value(ref)===''&&!this.formula(ref);if((formula||'')===this.formula(ref)&&this.value(ref)===String(value??''))return;
     const rowNo=Number(ref.match(/\d+$/)[0]);let row=this.rows.get(rowNo);
     if(!row){row=this.doc.createElementNS(NS,'row');row.setAttribute('r',rowNo);const after=[...this.rows.keys()].sort((a,b)=>a-b).find(n=>n>rowNo);this.data.insertBefore(row,after?this.rows.get(after):null);this.rows.set(rowNo,row);}
     let cell=old;
-    if(!cell){cell=this.doc.createElementNS(NS,'c');cell.setAttribute('r',ref);const next=elements(row,'c').find(c=>columnIndex(column(c.getAttribute('r')))>columnIndex(column(ref)));row.insertBefore(cell,next||null);this.cells.set(ref,cell);const style=this.cells.get(styleFrom)?.getAttribute('s');if(style)cell.setAttribute('s',style);}
+    if(!cell){cell=this.doc.createElementNS(NS,'c');cell.setAttribute('r',ref);const next=elements(row,'c').find(c=>columnIndex(column(c.getAttribute('r')))>columnIndex(column(ref)));row.insertBefore(cell,next||null);this.cells.set(ref,cell);}
+    // Preformatted empty cells already exist in the supplied sales workbook.
+    // They still need the previous data row's date/number styles when filled.
+    if(wasBlank&&styleFrom){const template=this.cells.get(styleFrom);if(template){const style=template.getAttribute('s');if(style)cell.setAttribute('s',style);else cell.removeAttribute('s');}}
     while(cell.firstChild)cell.removeChild(cell.firstChild);cell.removeAttribute('t');
     if(formula){const f=this.doc.createElementNS(NS,'f');f.appendChild(this.doc.createTextNode(formula));cell.appendChild(f);}
     if(value!=null&&value!==''){
@@ -28,12 +31,27 @@ class Sheet{
     this.dirty=true;
   }
   number(ref,value,options={}){this.set(ref,Number(value),options);}
+  copyStyle(ref,styleFrom,fallback){
+    const source=this.cells.get(styleFrom)?.getAttribute('s')||this.cells.get(fallback)?.getAttribute('s');if(!source)return;
+    let cell=this.cells.get(ref);
+    if(!cell){const rowNo=Number(ref.match(/\d+$/)[0]);let row=this.rows.get(rowNo);if(!row){row=this.doc.createElementNS(NS,'row');row.setAttribute('r',rowNo);const after=[...this.rows.keys()].sort((a,b)=>a-b).find(n=>n>rowNo);this.data.insertBefore(row,after?this.rows.get(after):null);this.rows.set(rowNo,row);}cell=this.doc.createElementNS(NS,'c');cell.setAttribute('r',ref);const next=elements(row,'c').find(c=>columnIndex(column(c.getAttribute('r')))>columnIndex(column(ref)));row.insertBefore(cell,next||null);this.cells.set(ref,cell);}
+    if(cell.getAttribute('s')!==source){cell.setAttribute('s',source);this.dirty=true;}
+  }
   updateRange(){const dimension=elements(this.doc,'dimension')[0];if(dimension){const end=dimension.getAttribute('ref').split(':').pop();const lastRow=Math.max(Number(end.match(/\d+$/)[0]),this.maxRow());dimension.setAttribute('ref',`A1:${column(end)}${lastRow}`);}const filter=elements(this.doc,'autoFilter')[0];if(filter){const [start,end]=filter.getAttribute('ref').split(':');if(end)filter.setAttribute('ref',`${start}:${column(end)}${Math.max(Number(end.match(/\d+$/)[0]),this.maxRow())}`);}}
 }
 
 class Workbook{
   constructor(bytes){if(bytes.length>50*1024*1024)throw Error('Workbook is too large');let expanded=0;this.files=unzipSync(bytes,{filter:entry=>{expanded+=entry.originalSize;if(expanded>256*1024*1024||entry.originalSize>64*1024*1024)throw Error('Expanded workbook size limit exceeded');return true;}});if(!this.files['xl/workbook.xml'])throw Error('Not an XLSX workbook');this.doc=xml(this.files['xl/workbook.xml']);this.strings=this.files['xl/sharedStrings.xml']?elements(xml(this.files['xl/sharedStrings.xml']),'si').map(si=>elements(si,'t').map(t=>t.textContent).join('')):[];this.date1904=elements(this.doc,'workbookPr')[0]?.getAttribute('date1904')==='1';const rels=xml(this.files['xl/_rels/workbook.xml.rels']);const byId=new Map(Array.from(rels.documentElement.childNodes).filter(n=>n.nodeType===1).map(r=>[r.getAttribute('Id'),r.getAttribute('Target')]));this.sheets=new Map();for(const sheet of elements(this.doc,'sheet')){const target=byId.get(sheet.getAttribute('r:id'));const file=target.startsWith('/')?target.slice(1):path.posix.normalize('xl/'+target);if(!this.files[file])throw Error('Missing worksheet '+file);this.sheets.set(sheet.getAttribute('name'),new Sheet(this,sheet.getAttribute('name'),file));}}
   sheet(name){const sheet=this.sheets.get(name);if(!sheet)throw Error('Required worksheet missing: '+name);return sheet;}
+  focus(name,row){
+    const names=[...this.sheets.keys()],index=names.indexOf(name);if(index<0)throw Error('Worksheet not found: '+name);
+    const view=elements(this.doc,'workbookView')[0];if(view)view.setAttribute('activeTab',index);
+    for(const [sheetName,sheet] of this.sheets){const views=elements(sheet.doc,'sheetView');for(const item of views){if(sheetName===name)item.setAttribute('tabSelected','1');else item.removeAttribute('tabSelected');}if(views.length)sheet.dirty=true;}
+    const sheet=this.sheet(name),sheetView=elements(sheet.doc,'sheetView')[0];if(!sheetView)return;
+    const pane=elements(sheetView,'pane')[0],selections=elements(sheetView,'selection');
+    if(pane){pane.setAttribute('topLeftCell','A'+Math.max(2,row-10));const selection=selections.find(s=>s.getAttribute('pane')==='bottomLeft')||selections.at(-1);if(selection){selection.setAttribute('activeCell','B'+row);selection.setAttribute('sqref','B'+row+':L'+row);}}
+    else {sheetView.setAttribute('topLeftCell','A'+Math.max(1,row-10));let selection=selections[0];if(!selection){selection=sheet.doc.createElementNS(NS,'selection');sheetView.appendChild(selection);}selection.setAttribute('activeCell','B'+row);selection.setAttribute('sqref','B'+row+':L'+row);}
+  }
   serial(date){return (Date.parse(date+'T00:00:00Z')-Date.parse(this.date1904?'1904-01-01T00:00:00Z':'1899-12-30T00:00:00Z'))/86400000;}
   date(serial){const time=Date.parse(this.date1904?'1904-01-01T00:00:00Z':'1899-12-30T00:00:00Z')+Number(serial)*86400000;return Number.isFinite(time)?new Date(time).toISOString().slice(0,10):null;}
   get dirty(){return [...this.sheets.values()].some(s=>s.dirty);}

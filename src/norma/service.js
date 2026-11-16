@@ -1,7 +1,7 @@
 const fs=require('fs'),path=require('path'),crypto=require('crypto');
 const {Workbook}=require('./xlsx');
 const {parseNormaPdf}=require('./parser');
-const {checkHeaders,addInvoice,syncStock}=require('./workbook');
+const {SHEETS,checkHeaders,addInvoice,syncStock}=require('./workbook');
 const hash=bytes=>crypto.createHash('sha256').update(bytes).digest('hex');
 const today=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Kolkata',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
 function loadConfig(file){
@@ -48,6 +48,8 @@ async function runNorma(config,{throughDate=today(),log=console.log,parsePdf=par
   const saveReport=()=>fs.writeFileSync(reportPath,JSON.stringify(report,null,2));
   try{
     const files=fs.readdirSync(config.pendingDirectory,{withFileTypes:true}).filter(f=>f.isFile()&&/\.pdf$/i.test(f.name)).map(f=>path.join(config.pendingDirectory,f.name)).sort();
+    log('Norma workbook:',config.workbookPath);log('Norma Pending folder:',config.pendingDirectory);log('PDF files found:',files.length);
+    if(!files.length)log('No PDF files found directly in Pending. Daily stock will be checked; no new sales rows will be added.');
     const parsed=[];
     for(const file of files){try{const bytes=fs.readFileSync(file),invoices=await parsePdf(bytes);parsed.push({file,bytes,invoices});}catch(error){const entry={file,status:'FAILED',error:error.message};report.files.push(entry);report.errors.push(entry);log('Norma PDF kept in Pending:',path.basename(file),error.message);}}
     const allParts=[...new Set(parsed.flatMap(p=>p.invoices.flatMap(i=>i.items.map(item=>item.partNumber))))];
@@ -59,14 +61,15 @@ async function runNorma(config,{throughDate=today(),log=console.log,parsePdf=par
         const affected={gurgaon:[],gujarat:[]};changes.forEach((c,index)=>{if(c.status==='ADDED')affected[item.invoices[index].region].push(item.invoices[index].date);});
         if(item.invoices.some(i=>i.date>throughDate))throw Error('Invoice date is after the stock processing date');
         entry.sales=changes;entry.stock=syncStock(book,{affected,throughDate,extraParts:allParts,openingBalances:config.openingBalances});
+        const added=changes.findIndex(c=>c.status==='ADDED');if(added>=0)book.focus(SHEETS[item.invoices[added].region],changes[added].rows[0]);
         const backup=commitWorkbook(config,original,book);if(backup)report.backups.push(backup);
         entry.donePath=archive(item.file,item.bytes,config.doneDirectory);entry.status='DONE';
-        log('Norma saved:',path.basename(item.file),changes.map(c=>c.invoiceNumber+' '+c.status).join(', '));
+        log('Norma saved:',path.basename(item.file),changes.map((c,index)=>c.invoiceNumber+' '+c.status+'; sheet "'+SHEETS[item.invoices[index].region]+'", row(s) '+c.rows.join(', ')).join(' | '));
       }catch(error){entry.status='FAILED';entry.error=error.message;report.errors.push({file:item.file,error:error.message});log('Norma PDF kept in Pending:',path.basename(item.file),error.message);}
       saveReport();
     }
     if(!parsed.length&&!files.length){const original=fs.readFileSync(config.workbookPath),book=new Workbook(original);checkHeaders(book);report.stock.push(syncStock(book,{throughDate,openingBalances:config.openingBalances}));const backup=commitWorkbook(config,original,book);if(backup)report.backups.push(backup);}
-    report.completedAt=new Date().toISOString();saveReport();log('Norma report:',reportPath);return {...report,reportPath};
+    report.completedAt=new Date().toISOString();saveReport();log('Norma workbook output:',config.workbookPath);log('Norma report:',reportPath);return {...report,reportPath};
   }finally{fs.closeSync(fd);fs.unlinkSync(lock);}
 }
 async function main(){
