@@ -34,7 +34,7 @@ function stockBlocks(sheet,region){
   return titles;
 }
 
-function latestClosing(sheet,blocks,{region,part,beforeDate}){
+function latestClosing(sheet,blocks,{region,part,beforeDate,recovery}){
   // Match worksheet entries by region, part and date. Row position only breaks
   // ties between repeated headings: the last entry for that date wins.
   const entries=blocks.filter(b=>b.date<beforeDate&&b.parts.has(part)).sort((a,b)=>b.date.localeCompare(a.date)||b.title-a.title);
@@ -42,8 +42,48 @@ function latestClosing(sheet,blocks,{region,part,beforeDate}){
   const block=entries[0],row=block.parts.get(part),ref=(region==='gurgaon'?'G':'N')+row;
   const raw=sheet.value(ref),formula=sheet.formula(ref),error=sheet.cells.get(ref)?.getAttribute('t')==='e';
   const parsed=decimal(raw,6);
-  if(raw===''||error||parsed==null||/#(?:REF!|VALUE!|DIV\/0!|N\/A|NAME\?|NUM!|NULL!)/i.test(formula))throw Error('Latest stock entry for '+region+' '+part+' on '+block.date+' has no valid saved closing quantity at STOCK DETAILS!'+ref+'. Correct that latest entry in Excel, recalculate, save and close Excel, then retry. An older entry or zero will not be substituted.');
+  if(raw===''||error||parsed==null||/#(?:REF!|VALUE!|DIV\/0!|N\/A|NAME\?|NUM!|NULL!)/i.test(formula)){
+    const restored=recovery&&recoverClosing(sheet,entries,{region,part,recovery});
+    if(restored!=null)return {region,partNumber:part,date:beforeDate,sourceDate:block.date,sourceRow:row,sourceCell:ref,quantity:restored,recovered:true};
+    throw Error('Latest stock entry for '+region+' '+part+' on '+block.date+' has no valid saved closing quantity at STOCK DETAILS!'+ref+'. Correct that latest entry in Excel, recalculate, save and close Excel, then retry. An older entry or zero will not be substituted.');
+  }
   return {region,partNumber:part,date:beforeDate,sourceDate:block.date,sourceRow:row,sourceCell:ref,quantity:BigInt(parsed.replace('.',''))};
+}
+
+function recoverClosing(sheet,entries,{region,part,recovery}){
+  const c=region==='gurgaon'?{opening:'C',received:'D',transfer:'E',dispatch:'F',balance:'G'}:{opening:'K',received:'L',dispatch:'M',balance:'N'};
+  const latest=entries[0],lastRow=latest.parts.get(part),broken=ref=>/^\+?#REF!$/i.test((sheet.formula(ref)||sheet.value(ref)).replace(/^=/,'').trim());
+  // Recover this specific defect, not arbitrary missing/corrupt balances.
+  if(!broken(c.opening+lastRow)||!/#REF!/i.test(sheet.value(c.balance+lastRow)+' '+sheet.formula(c.balance+lastRow)))return null;
+  const days=new Map();for(const entry of entries)if(!days.has(entry.date))days.set(entry.date,entry);
+  const ordered=[...days.values()].sort((a,b)=>a.date.localeCompare(b.date));
+  const validClosing=entry=>{const ref=c.balance+entry.parts.get(part);return decimal(sheet.value(ref),6)!=null&&sheet.cells.get(ref)?.getAttribute('t')!=='e'&&!/#/.test(sheet.formula(ref));};
+  const base=[...ordered].reverse().find(e=>e.date<latest.date&&validClosing(e));
+  let balance,first,basis;
+  if(base){balance=units(sheet.value(c.balance+base.parts.get(part)));first=nextDay(base.date);basis='previous-valid-closing';}
+  else {const earliest=ordered[0],ref=c.opening+earliest.parts.get(part),value=decimal(sheet.value(ref),6);if(value!=null&&sheet.cells.get(ref)?.getAttribute('t')!=='e'&&!/#/.test(sheet.formula(ref))){balance=units(value);basis='recorded-initial-opening';}else if(broken(ref)){const configured=Object.hasOwn(recovery.openingBalances[region]||{},part);if(!configured&&[...recovery.totals].some(([key,value])=>key.endsWith(':'+part)&&key.slice(0,10)<earliest.date&&value!==0n))return null;balance=units(recovery.openingBalances[region]?.[part]??0);basis=configured?'configured-new-part-opening':'new-part-zero-opening';}else return null;first=earliest.date;}
+  if((Date.parse(latest.date)-Date.parse(first))/86400000>370)throw Error('Stock recovery exceeds 370 days for '+part+'; verify the latest closing in Excel');
+  const plans=[],steps=[];
+  for(let date=first;date<=latest.date;date=nextDay(date)){
+    const entry=days.get(date),row=entry?.parts.get(part),salesKnown=recovery.totals.has(date+':'+part);let received=0n,transfer=0n,dispatch=recovery.totals.get(date+':'+part)||0n;
+    if(row){
+      const openingRef=c.opening+row,openingFormula=sheet.formula(openingRef).replace(/[$\s=]/g,''),closingRef=c.balance+row,closingFormula=sheet.formula(closingRef).replace(/[$\s=]/g,'');
+      const expected=openingRef+'+'+c.received+row+(c.transfer?'-'+c.transfer+row:'')+'-'+c.dispatch+row;
+      if(closingFormula!==expected&&!broken(closingRef))return null;
+      if(!broken(openingRef)&&!new RegExp('^'+c.balance+'\\d+$').test(openingFormula)){
+        if(!openingFormula&&decimal(sheet.value(openingRef),6)!=null)balance=units(sheet.value(openingRef));else return null;
+      }
+      const calc=stockCalculator(sheet);received=calc(c.received+row);transfer=c.transfer?calc(c.transfer+row):0n;
+      if(!salesKnown&&(sheet.value(c.dispatch+row)!==''||sheet.formula(c.dispatch+row)))dispatch=calc(c.dispatch+row);
+      plans.push({openingRef,closingRef,opening:balance,formula:expected,oldOpening:sheet.formula(openingRef)||sheet.value(openingRef),oldClosing:sheet.value(closingRef),dispatchRef:c.dispatch+row,oldDispatch:sheet.value(c.dispatch+row),dispatch,salesKnown});
+    }
+    const opening=balance;balance+=received-transfer-dispatch;
+    if(row)plans.at(-1).closing=balance;
+    steps.push({date,row:row??null,opening:quantity(opening),received:quantity(received),transfer:quantity(transfer),dispatch:quantity(dispatch),closing:quantity(balance),dispatchSource:!salesKnown&&row&&(sheet.value(c.dispatch+row)!==''||sheet.formula(c.dispatch+row))?'stock-entry':'sales-sheet'});
+  }
+  for(const plan of plans){sheet.number(plan.openingRef,quantity(plan.opening));if(plan.salesKnown)sheet.number(plan.dispatchRef,quantity(plan.dispatch));sheet.number(plan.closingRef,quantity(plan.closing),{formula:plan.formula});}
+  recovery.recoveries.push({region,partNumber:part,date:latest.date,basis,baseDate:base?.date||null,baseCell:base?c.balance+base.parts.get(part):null,quantity:quantity(balance),steps,changes:plans.map(p=>({openingCell:p.openingRef,previousOpening:p.oldOpening,newOpening:quantity(p.opening),closingCell:p.closingRef,previousClosing:p.oldClosing,newClosing:quantity(p.closing)}))});
+  return balance;
 }
 
 function stockCalculator(sheet){
@@ -67,7 +107,7 @@ function stockCalculator(sheet){
 }
 const nextDay=date=>new Date(Date.parse(date+'T00:00:00Z')+86400000).toISOString().slice(0,10);
 function syncStock(book,{affected={gurgaon:[],gujarat:[]},throughDate,extraParts=[],openingBalances={}}){
-  if(!validDate(throughDate))throw Error('Invalid Norma stock through-date');const sheet=book.sheet(SHEETS.stock),result={createdDays:0,updatedDays:0,warnings:[],openingSources:[]};const newTitles=new Map(),updatedDates=new Set();
+  if(!validDate(throughDate))throw Error('Invalid Norma stock through-date');const sheet=book.sheet(SHEETS.stock),result={createdDays:0,updatedDays:0,warnings:[],openingSources:[],recoveries:[]};const newTitles=new Map(),updatedDates=new Set();
   // Reserve enough vertical space for either side before arranging new days.
   const possibleParts=new Set(extraParts);for(const [ref] of sheet.cells)if(/^(?:B|J)\d+$/.test(ref)&&partPattern.test(sheet.value(ref)))possibleParts.add(sheet.value(ref));for(const region of ['gurgaon','gujarat'])for(const row of salesRows(book,region))possibleParts.add(row.part);
   const blockHeight=possibleParts.size+4;let nextTitle=sheet.maxRow()+2;
@@ -84,7 +124,7 @@ function syncStock(book,{affected={gurgaon:[],gujarat:[]},throughDate,extraParts
       const earlier=blocks.filter(b=>b.date<date).sort((a,b)=>b.date.localeCompare(a.date)||b.title-a.title);
       const parts=new Set([...earlier.flatMap(b=>[...b.parts.keys()]),...block.parts.keys(),...extraParts,...sales.filter(r=>r.date===date).map(r=>r.part)]);
       for(const part of parts){if(!partPattern.test(part))throw Error('Invalid Norma stock part '+part);let row=block.parts.get(part);if(!row){row=Math.max(block.title+2,...[...block.parts.values()].map(r=>r+1));if(!fresh){while(row<=block.end&&[cols.part,cols.opening,cols.received,cols.transfer,cols.dispatch,cols.balance].filter(Boolean).some(c=>sheet.value(c+row)!==''||sheet.formula(c+row)))row++;if(row>block.end)throw Error('No free stock row for '+part+' on '+date+'; add a blank row to that stock block in Excel');}sheet.set(cols.part+row,part,{styleFrom:cols.part+'3'});sheet.set(cols.serial+row,block.parts.size+1,{styleFrom:cols.serial+'3'});block.parts.set(part,row);}
-        const source=latestClosing(sheet,blocks,{region,part,beforeDate:date}),openingRef=cols.opening+row;
+        const source=latestClosing(sheet,blocks,{region,part,beforeDate:date,recovery:{totals,openingBalances,recoveries:result.recoveries}}),openingRef=cols.opening+row;
         if(source){sheet.number(openingRef,quantity(source.quantity),{styleFrom:cols.opening+'3'});result.openingSources.push({...source,quantity:quantity(source.quantity)});}
         else if(sheet.value(openingRef)===''&&!sheet.formula(openingRef))sheet.number(openingRef,openingBalances[region]?.[part]??0,{styleFrom:cols.opening+'3'});
         sheet.number(cols.dispatch+row,quantity(totals.get(date+':'+part)||0n),{styleFrom:cols.dispatch+'3'});

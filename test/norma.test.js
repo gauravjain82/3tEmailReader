@@ -12,6 +12,36 @@ function latestEntryBook(region='gurgaon',closing=825){
   s.set(c.part+'1276','Norma '+c.name+' 18.11.2026 opening');s.set(c.part+'1277','Part No.');s.set(c.part+'1278','13892M74L60');s.number(c.opening+'1278',99999,{formula:'#REF!'});s.number(c.received+'1278',100);if(c.transfer)s.number(c.transfer+'1278',25);s.number(c.dispatch+'1278',200);s.number(c.balance+'1278',closing);return {book,s,c};
 }
 
+function closingError(sheet,ref,formula){sheet.number(ref,0,{formula});const cell=sheet.cells.get(ref);cell.setAttribute('t','e');elements(cell,'v')[0].textContent='#REF!';}
+
+test('broken latest opening is recovered by replaying receipts, transfers and recorded dispatch',()=>{
+  const {book,s}=latestEntryBook();closingError(s,'G1278','C1278+D1278-E1278-F1278');const result=syncStock(book,{throughDate:'2026-11-19'});
+  assert.equal(s.value('C1278'),'950');assert.equal(s.formula('C1278'),'');assert.equal(s.value('G1278'),'825');assert.equal(s.value('D1278'),'100');assert.equal(s.value('E1278'),'25');assert.equal(s.value('F1278'),'200');assert.equal(result.recoveries[0].basis,'previous-valid-closing');assert.equal(result.recoveries[0].quantity,825);
+  const row=stockBlocks(s,'gurgaon').find(b=>b.date==='2026-11-19').parts.get('13892M74L60');assert.equal(s.value('C'+row),'825');
+});
+
+test('recovery includes sales on missing stock days rather than skipping their dispatch',()=>{
+  const {book,s}=latestEntryBook();closingError(s,'G1278','C1278+D1278-E1278-F1278');addInvoice(book,{...invoice(),date:'2026-11-17'});
+  const result=syncStock(book,{throughDate:'2026-11-19'});assert.equal(s.value('C1278'),'700');assert.equal(s.value('G1278'),'575');const step=result.recoveries[0].steps.find(s=>s.date==='2026-11-17');assert.equal(step.dispatch,250);assert.equal(step.dispatchSource,'sales-sheet');
+});
+
+test('a new part recovers from zero or configured opening while preserving its movements',()=>{
+  for(const [opening,basis] of [[0,'new-part-zero-opening'],[500,'configured-new-part-opening']]){
+    const {book,s}=latestEntryBook('gujarat');s.set('J1278','13894M74L50');closingError(s,'N1278','K1278+L1278-M1278');const openingBalances=opening?{gujarat:{'13894M74L50':opening}}:{};const result=syncStock(book,{throughDate:'2026-11-19',openingBalances});assert.equal(s.value('K1278'),String(opening));assert.equal(s.value('N1278'),String(opening-100));assert.equal(result.recoveries.find(r=>r.partNumber==='13894M74L50').basis,basis);
+  }
+});
+
+test('recovery refuses unknown adjustments and parts with earlier sales but no verified opening',()=>{
+  const partial=latestEntryBook();partial.s.number('C1278',0,{formula:'#REF!+50'});closingError(partial.s,'G1278','C1278+D1278-E1278-F1278');assert.throws(()=>syncStock(partial.book,{throughDate:'2026-11-19'}),/Latest stock entry/);assert.equal(partial.s.formula('C1278'),'#REF!+50');
+  const receipts=latestEntryBook();closingError(receipts.s,'G1278','C1278+D1278-E1278-F1278');receipts.s.number('D1278',0,{formula:'#REF!'});assert.throws(()=>syncStock(receipts.book,{throughDate:'2026-11-19'}),/D1278/);assert.equal(receipts.s.formula('C1278'),'#REF!');
+  const existing=latestEntryBook('gujarat');existing.s.set('J1278','13894M74L50');closingError(existing.s,'N1278','K1278+L1278-M1278');const doc=invoice();addInvoice(existing.book,{...doc,date:'2026-11-17',region:'gujarat',plant:'SMG',items:doc.items.map(i=>({...i,partNumber:'13894M74L50',cgst:'0.00',sgst:'0.00',igst:'1152.44'}))});assert.throws(()=>syncStock(existing.book,{throughDate:'2026-11-19'}),/Latest stock entry/);
+});
+
+test('supplied original client workbook processes the PDF with automatic recovery and a backup',async t=>{
+  const source='C:/Users/DELL/Downloads/Norma.xlsx',pdf='C:/Users/DELL/Downloads/SalesInvoiceNGT-ext05955-97053_19112026_134158_890_97665_P.pdf';if(!fs.existsSync(source)||!fs.existsSync(pdf))return t.skip('Client workbook/PDF unavailable');const original=fs.readFileSync(source),input=new Workbook(original);if(input.sheet('STOCK DETAILS').formula('C1278')!=='#REF!'||input.sheet('STOCK DETAILS').formula('K1278')!=='#REF!')return t.skip('Client workbook no longer contains reported broken entries');
+  const {config}=fixture(t);fs.writeFileSync(config.workbookPath,original);fs.copyFileSync(pdf,path.join(config.pendingDirectory,'invoice.pdf'));const report=await runNorma(config,{throughDate:'2026-11-19',log:()=>{}});assert.deepEqual(report.errors,[]);assert.equal(report.files[0].status,'DONE');assert.equal(report.files[0].stock.recoveries.length,2);assert.equal(report.files[0].stock.recoveries.find(r=>r.region==='gujarat').basis,'new-part-zero-opening');assert.deepEqual(fs.readFileSync(report.backups[0]),original);const saved=new Workbook(fs.readFileSync(config.workbookPath));assert.equal(saved.sheet('STOCK DETAILS').value('C1278'),'0');assert.equal(saved.sheet('STOCK DETAILS').value('K1278'),'0');assert.ok(salesRows(saved,'gurgaon').some(r=>r.number==='2620009051'));assert.deepEqual(fs.readFileSync(source),original);
+});
+
 test('opening uses latest saved part closing without following old opening-cell references',()=>{
   const {book,s}=latestEntryBook();const result=syncStock(book,{throughDate:'2026-11-19'});
   const row=stockBlocks(s,'gurgaon').find(b=>b.date==='2026-11-19').parts.get('13892M74L60');
@@ -46,7 +76,7 @@ test('rerunning a date reads the updated latest closing and does not subtract di
 
 test('invalid latest closing does not fall back to an older balance or numeric error cache',()=>{
   for(const corrupt of [s=>s.set('G1278',''),s=>s.set('G1278','#REF!'),s=>s.number('G1278',99999,{formula:'#REF!'}),s=>{s.number('G1278',950);s.cells.get('G1278').setAttribute('t','e');}]){
-    const {book,s}=latestEntryBook();corrupt(s);assert.throws(()=>syncStock(book,{throughDate:'2026-11-19'}),/Latest stock entry.*2026-11-18.*G1278/);
+    const {book,s}=latestEntryBook();s.number('C1278',950);corrupt(s);assert.throws(()=>syncStock(book,{throughDate:'2026-11-19'}),/Latest stock entry.*2026-11-18.*G1278/);
   }
 });
 

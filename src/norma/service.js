@@ -64,6 +64,7 @@ async function runNorma(config,{throughDate=today(),log=console.log,parsePdf=par
         const added=changes.findIndex(c=>c.status==='ADDED');if(added>=0)book.focus(SHEETS[item.invoices[added].region],changes[added].rows[0]);
         const backup=commitWorkbook(config,original,book);if(backup)report.backups.push(backup);
         log('Norma stock: openings read from latest dated worksheet entries:',entry.stock.openingSources.length);
+        for(const recovered of entry.stock.recoveries)log('Norma stock recovered:',recovered.region,recovered.partNumber,recovered.date,'closing',recovered.quantity,'basis:',recovered.basis);
         entry.donePath=archive(item.file,item.bytes,config.doneDirectory);entry.status='DONE';
         log('Norma saved:',path.basename(item.file),changes.map((c,index)=>c.invoiceNumber+' '+c.status+'; sheet "'+SHEETS[item.invoices[index].region]+'", row(s) '+c.rows.join(', ')).join(' | '));
       }catch(error){entry.status='FAILED';entry.error=error.message;report.errors.push({file:item.file,error:error.message});log('Norma PDF kept in Pending:',path.basename(item.file),error.message);}
