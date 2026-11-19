@@ -1,10 +1,65 @@
 const {test}=require('node:test');const assert=require('node:assert/strict');const fs=require('fs'),os=require('os'),path=require('path');
 const {normaWorkbook,normaText}=require('./helpers/normaFixture');
 const {parseNormaText,parseNormaPdf}=require('../src/norma/parser');const {Workbook,NS,elements}=require('../src/norma/xlsx');
-const {addInvoice,syncStock,salesRows,stockBlocks,checkHeaders}=require('../src/norma/workbook');
+const {addInvoice,syncStock,salesRows,stockBlocks,checkHeaders,latestClosing}=require('../src/norma/workbook');
 const {runNorma,loadConfig}=require('../src/norma/service');
 function fixture(t){const root=fs.mkdtempSync(path.join(os.tmpdir(),'norma-test-'));const config={workbookPath:path.join(root,'stock.xlsx'),pendingDirectory:path.join(root,'Pending'),doneDirectory:path.join(root,'Done'),backupDirectory:path.join(root,'Backups'),reportDirectory:path.join(root,'Reports')};fs.writeFileSync(config.workbookPath,normaWorkbook());fs.mkdirSync(config.pendingDirectory);t.after(()=>{assert.equal(path.dirname(root),path.resolve(os.tmpdir()));assert.ok(path.basename(root).startsWith('norma-test-'));fs.rmSync(root,{recursive:true,force:true});});return {root,config};}
 const invoice=()=>parseNormaText(normaText())[0];
+
+function latestEntryBook(region='gurgaon',closing=825){
+  const book=new Workbook(normaWorkbook()),s=book.sheet('STOCK DETAILS');
+  const c=region==='gurgaon'?{part:'B',opening:'C',received:'D',transfer:'E',dispatch:'F',balance:'G',name:'Gurgaon'}:{part:'J',opening:'K',received:'L',dispatch:'M',balance:'N',name:'Gujarat'};
+  s.set(c.part+'1276','Norma '+c.name+' 18.11.2026 opening');s.set(c.part+'1277','Part No.');s.set(c.part+'1278','13892M74L60');s.number(c.opening+'1278',99999,{formula:'#REF!'});s.number(c.received+'1278',100);if(c.transfer)s.number(c.transfer+'1278',25);s.number(c.dispatch+'1278',200);s.number(c.balance+'1278',closing);return {book,s,c};
+}
+
+test('opening uses latest saved part closing without following old opening-cell references',()=>{
+  const {book,s}=latestEntryBook();const result=syncStock(book,{throughDate:'2026-11-19'});
+  const row=stockBlocks(s,'gurgaon').find(b=>b.date==='2026-11-19').parts.get('13892M74L60');
+  assert.equal(s.value('C'+row),'825');assert.equal(s.formula('C'+row),'');assert.equal(s.formula('C1278'),'#REF!');assert.equal(s.value('D1278'),'100');assert.equal(s.value('E1278'),'25');
+  const source=result.openingSources.find(s=>s.region==='gurgaon'&&s.partNumber==='13892M74L60');assert.equal(source.sourceDate,'2026-11-18');assert.equal(source.sourceCell,'G1278');assert.equal(source.quantity,825);
+});
+
+test('Gujarat independently carries a verified zero from its latest entry',()=>{
+  const {book,s}=latestEntryBook('gujarat',0);s.number('N3',10000);const result=syncStock(book,{throughDate:'2026-11-19'});const row=stockBlocks(s,'gujarat').find(b=>b.date==='2026-11-19').parts.get('13892M74L60');assert.equal(s.value('K'+row),'0');assert.equal(s.formula('K'+row),'');assert.equal(result.openingSources.find(s=>s.region==='gujarat').quantity,0);
+});
+
+test('each part keeps its own latest entry even when absent from the newest daily block',()=>{
+  const {book,s}=latestEntryBook();s.set('B4','13893M74L60');s.number('G4',3000);syncStock(book,{throughDate:'2026-11-19'});
+  const block=stockBlocks(s,'gurgaon').find(b=>b.date==='2026-11-19'),row=block.parts.get('13893M74L60');assert.ok(row);assert.equal(s.value('C'+row),'3000');assert.equal(s.formula('C'+row),'');
+});
+
+test('latest lookup matches dates and parts, excludes future entries and uses last same-date entry',()=>{
+  const book=new Workbook(normaWorkbook()),s=book.sheet('STOCK DETAILS');
+  for(const [title,date,value] of [[100,'18.11.2026',400],[200,'20.11.2026',99999],[300,'15.11.2026',600],[400,'18.11.2026',450]]){s.set('B'+title,'Norma Gurgaon '+date+' opening');s.set('B'+(title+2),'13892M74L60');s.number('G'+(title+2),value);}
+  s.set('B403','13893M74L60');s.number('G403',7000);
+  const blocks=stockBlocks(s,'gurgaon');const source=latestClosing(s,blocks,{region:'gurgaon',part:'13892M74L60',beforeDate:'2026-11-19'});assert.equal(source.quantity,450000000n);assert.equal(source.sourceCell,'G402');assert.equal(source.sourceDate,'2026-11-18');
+  assert.equal(latestClosing(s,blocks,{region:'gurgaon',part:'13893M74L60',beforeDate:'2026-11-19'}).quantity,7000000000n);
+  assert.equal(latestClosing(s,blocks,{region:'gurgaon',part:'18526M86J20',beforeDate:'2026-11-19'}),null);
+  s.set('B404','13892M74L60');s.number('G404',475);assert.equal(latestClosing(s,stockBlocks(s,'gurgaon'),{region:'gurgaon',part:'13892M74L60',beforeDate:'2026-11-19'}).sourceCell,'G404');
+  syncStock(book,{throughDate:'2026-11-19'});const current=stockBlocks(s,'gurgaon').find(b=>b.date==='2026-11-19').parts.get('13892M74L60');assert.equal(s.value('C'+current),'475');assert.equal(s.formula('C'+current),'');
+});
+
+test('rerunning a date reads the updated latest closing and does not subtract dispatch twice',()=>{
+  const book=new Workbook(normaWorkbook()),s=book.sheet('STOCK DETAILS');addInvoice(book,invoice());syncStock(book,{throughDate:'2026-11-10'});const row=stockBlocks(s,'gurgaon').find(b=>b.date==='2026-11-10').parts.get('13892M74L60');assert.equal(s.value('G'+row),'700');
+  syncStock(book,{throughDate:'2026-11-10'});assert.equal(s.value('G'+row),'700');s.number('G3',1200);syncStock(book,{throughDate:'2026-11-10'});assert.equal(s.value('C'+row),'1200');assert.equal(s.value('F'+row),'250');assert.equal(s.value('G'+row),'950');
+});
+
+test('invalid latest closing does not fall back to an older balance or numeric error cache',()=>{
+  for(const corrupt of [s=>s.set('G1278',''),s=>s.set('G1278','#REF!'),s=>s.number('G1278',99999,{formula:'#REF!'}),s=>{s.number('G1278',950);s.cells.get('G1278').setAttribute('t','e');}]){
+    const {book,s}=latestEntryBook();corrupt(s);assert.throws(()=>syncStock(book,{throughDate:'2026-11-19'}),/Latest stock entry.*2026-11-18.*G1278/);
+  }
+});
+
+test('Norma saves latest-entry openings before archiving and records their source dates',async t=>{
+  const {config}=fixture(t),{book}=latestEntryBook(),file=path.join(config.pendingDirectory,'invoice.pdf');fs.writeFileSync(config.workbookPath,book.pack());fs.writeFileSync(file,'PDF bytes');const doc={...invoice(),date:'2026-11-19'};
+  const report=await runNorma(config,{throughDate:'2026-11-19',parsePdf:async()=>[doc],log:()=>{}});assert.equal(report.errors.length,0);assert.equal(report.files[0].status,'DONE');assert.ok(report.files[0].stock.openingSources.some(s=>s.sourceCell==='G1278'&&s.quantity===825));assert.ok(report.backups.length);
+  const saved=new Workbook(fs.readFileSync(config.workbookPath)),sheet=saved.sheet('STOCK DETAILS'),row=stockBlocks(sheet,'gurgaon').find(b=>b.date==='2026-11-19').parts.get('13892M74L60');assert.equal(sheet.value('C'+row),'825');assert.equal(sheet.value('G'+row),'575');assert.equal(sheet.formula('C'+row),'');assert.equal(sheet.formula('C1278'),'#REF!');assert.equal(salesRows(saved,'gurgaon').length,1);assert.ok(fs.existsSync(path.join(config.doneDirectory,'invoice.pdf')));assert.equal(fs.existsSync(file),false);
+});
+
+test('invalid latest saved closing preserves workbook bytes and leaves the PDF in Pending',async t=>{
+  const {config}=fixture(t),book=new Workbook(fs.readFileSync(config.workbookPath));book.sheet('STOCK DETAILS').number('G3',950,{formula:'#REF!'});fs.writeFileSync(config.workbookPath,book.pack());const original=fs.readFileSync(config.workbookPath),file=path.join(config.pendingDirectory,'invoice.pdf');fs.writeFileSync(file,'PDF test bytes');
+  const report=await runNorma(config,{throughDate:'2026-11-10',parsePdf:async()=>[invoice()],log:()=>{}});assert.equal(report.errors.length,1);assert.match(report.errors[0].error,/Latest stock entry.*G3/);assert.deepEqual(fs.readFileSync(config.workbookPath),original);assert.equal(fs.existsSync(file),true);assert.equal(report.backups.length,0);
+});
 
 test('new sales rows inherit date formatting even when styled blank cells already exist',()=>{
   const book=new Workbook(normaWorkbook());addInvoice(book,invoice());const sheet=book.sheet('Norma sales report Ggn.');sheet.cells.get('C2').setAttribute('s','13');

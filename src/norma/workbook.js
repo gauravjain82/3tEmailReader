@@ -30,24 +30,44 @@ function stockBlocks(sheet,region){
   const names=region==='gurgaon'?['A','B']:['I','J'],label=region==='gurgaon'?'Gurgaon':'Gujarat',titles=[];
   for(const row of sheet.rows.keys())for(const col of names){const m=sheet.value(col+row).match(new RegExp('Norma\\s+'+label+'\\s*(\\d{2})[./-](\\d{2})[./-](\\d{4})','i'));if(m){const date=`${m[3]}-${m[2]}-${m[1]}`;if(!validDate(date))throw Error('Invalid stock heading date at '+col+row);titles.push({date,title:row,parts:new Map()});}}
   titles.sort((a,b)=>a.title-b.title);const partCol=region==='gurgaon'?'B':'J';
-  titles.forEach((block,i)=>{block.end=(titles[i+1]?.title||sheet.maxRow()+3)-1;for(let row=block.title+2;row<=Math.min(block.end,sheet.maxRow());row++){const part=sheet.value(partCol+row);if(partPattern.test(part)){if(block.parts.has(part))throw Error('Repeated stock part in block '+block.date);block.parts.set(part,row);}}});
+  titles.forEach((block,i)=>{block.end=(titles[i+1]?.title||sheet.maxRow()+3)-1;for(let row=block.title+2;row<=Math.min(block.end,sheet.maxRow());row++){const part=sheet.value(partCol+row);if(partPattern.test(part))block.parts.set(part,row);}});
   return titles;
+}
+
+function latestClosing(sheet,blocks,{region,part,beforeDate}){
+  // Match worksheet entries by region, part and date. Row position only breaks
+  // ties between repeated headings: the last entry for that date wins.
+  const entries=blocks.filter(b=>b.date<beforeDate&&b.parts.has(part)).sort((a,b)=>b.date.localeCompare(a.date)||b.title-a.title);
+  if(!entries.length)return null;
+  const block=entries[0],row=block.parts.get(part),ref=(region==='gurgaon'?'G':'N')+row;
+  const raw=sheet.value(ref),formula=sheet.formula(ref),error=sheet.cells.get(ref)?.getAttribute('t')==='e';
+  const parsed=decimal(raw,6);
+  if(raw===''||error||parsed==null||/#(?:REF!|VALUE!|DIV\/0!|N\/A|NAME\?|NUM!|NULL!)/i.test(formula))throw Error('Latest stock entry for '+region+' '+part+' on '+block.date+' has no valid saved closing quantity at STOCK DETAILS!'+ref+'. Correct that latest entry in Excel, recalculate, save and close Excel, then retry. An older entry or zero will not be substituted.');
+  return {region,partNumber:part,date:beforeDate,sourceDate:block.date,sourceRow:row,sourceCell:ref,quantity:BigInt(parsed.replace('.',''))};
 }
 
 function stockCalculator(sheet){
   const cache=new Map(),active=new Set();
-  function cell(ref){ref=ref.replace(/\$/g,'');if(cache.has(ref))return cache.get(ref);if(active.has(ref))throw Error('Circular stock formula: '+ref);active.add(ref);const formula=sheet.formula(ref);let value;
-    if(!formula)value=units(sheet.value(ref));
-    else {const text=formula.replace(/^=/,'').replace(/\s/g,'');const tokens=text.match(/\$?[A-Z]+\$?\d+|\d+(?:\.\d+)?|[()+-]/g)||[];if(tokens.join('')!==text)throw Error('Unsupported stock formula at '+ref+': '+formula);let at=0;
-      function atom(){const t=tokens[at++];if(t==='+')return atom();if(t==='-')return -atom();if(t==='('){const n=expression();if(tokens[at++]!==')')throw Error('Unbalanced stock formula '+ref);return n;}if(/^\$?[A-Z]/.test(t||''))return cell(t);if(/^\d/.test(t||''))return units(t);throw Error('Invalid stock formula '+ref);}
-      function expression(){let n=atom();while(tokens[at]==='+'||tokens[at]==='-'){const op=tokens[at++],right=atom();n=op==='+'?n+right:n-right;}return n;}
-      value=expression();if(at!==tokens.length)throw Error('Invalid stock formula '+ref);
-    }active.delete(ref);cache.set(ref,value);return value;
+  function cell(ref){
+    ref=ref.replace(/\$/g,'');if(cache.has(ref))return cache.get(ref);if(active.has(ref))throw Error('Circular stock formula: '+ref);active.add(ref);
+    try {
+      const formula=sheet.formula(ref),raw=sheet.value(ref);let value;
+      if(/#REF!/i.test(formula)||raw==='#REF!')throw Error('Broken stock formula at STOCK DETAILS!'+ref+'. Correct this current-day value/formula in Excel, save and close Excel, then retry.');
+      if(!formula)value=units(raw);
+      else {
+        const text=formula.replace(/^=/,'').replace(/\s/g,'');const tokens=text.match(/\$?[A-Z]+\$?\d+|\d+(?:\.\d+)?|[()+-]/g)||[];
+        if(tokens.join('')!==text)throw Error('Unsupported stock formula at '+ref+': '+formula);let at=0;
+        function atom(){const t=tokens[at++];if(t==='+')return atom();if(t==='-')return -atom();if(t==='('){const n=expression();if(tokens[at++]!==')')throw Error('Unbalanced stock formula '+ref);return n;}if(/^\$?[A-Z]/.test(t||''))return cell(t);if(/^\d/.test(t||''))return units(t);throw Error('Invalid stock formula '+ref);}
+        function expression(){let n=atom();while(tokens[at]==='+'||tokens[at]==='-'){const op=tokens[at++],right=atom();n=op==='+'?n+right:n-right;}return n;}
+        value=expression();if(at!==tokens.length)throw Error('Invalid stock formula '+ref);
+      }
+      cache.set(ref,value);return value;
+    } finally {active.delete(ref);}
   }return cell;
 }
 const nextDay=date=>new Date(Date.parse(date+'T00:00:00Z')+86400000).toISOString().slice(0,10);
 function syncStock(book,{affected={gurgaon:[],gujarat:[]},throughDate,extraParts=[],openingBalances={}}){
-  if(!validDate(throughDate))throw Error('Invalid Norma stock through-date');const sheet=book.sheet(SHEETS.stock),result={createdDays:0,updatedDays:0,warnings:[]};const newTitles=new Map(),updatedDates=new Set();
+  if(!validDate(throughDate))throw Error('Invalid Norma stock through-date');const sheet=book.sheet(SHEETS.stock),result={createdDays:0,updatedDays:0,warnings:[],openingSources:[]};const newTitles=new Map(),updatedDates=new Set();
   // Reserve enough vertical space for either side before arranging new days.
   const possibleParts=new Set(extraParts);for(const [ref] of sheet.cells)if(/^(?:B|J)\d+$/.test(ref)&&partPattern.test(sheet.value(ref)))possibleParts.add(sheet.value(ref));for(const region of ['gurgaon','gujarat'])for(const row of salesRows(book,region))possibleParts.add(row.part);
   const blockHeight=possibleParts.size+4;let nextTitle=sheet.maxRow()+2;
@@ -58,14 +78,14 @@ function syncStock(book,{affected={gurgaon:[],gujarat:[]},throughDate,extraParts
     if((Date.parse(throughDate)-Date.parse(start))/86400000>370)throw Error('More than 370 daily stock blocks requested; choose a recent opening workbook');
     const totals=new Map(),sales=salesRows(book,region);for(const row of sales){const key=row.date+':'+row.part;totals.set(key,(totals.get(key)||0n)+units(row.qty));}
     for(let date=start;date<=throughDate;date=nextDay(date)){
-      const matches=blocks.filter(b=>b.date===date);if(matches.length>1)throw Error('Duplicate stock date headings need review: '+region+' '+date);
-      let block=matches[0],fresh=!block;
+      const matches=blocks.filter(b=>b.date===date);
+      let block=matches.at(-1),fresh=!block;
       if(fresh){let title=newTitles.get(date);if(!title){title=nextTitle;nextTitle+=blockHeight;newTitles.set(date,title);}const day=date.split('-').reverse().join('.');sheet.set(cols.part+title,`Norma ${region==='gurgaon'?'Gurgaon':'Gujarat'} ${day} opening`);const headings={[cols.serial]:'SR. No.',[cols.part]:'Part No.',[cols.opening]:'Opening Qty.',[cols.received]:'received quantity',...(cols.transfer?{[cols.transfer]:'GGN to SMG'}:{}),[cols.dispatch]:region==='gurgaon'?'MSIL Despatch qty.':'Despatch qty.',[cols.balance]:'Balance',...(region==='gujarat'?{O:'Transit'}:{})};for(const [c,v] of Object.entries(headings))sheet.set(c+(title+1),v,{styleFrom:c+'2'});block={date,title,end:Infinity,parts:new Map()};blocks.push(block);result.createdDays++;}
       const earlier=blocks.filter(b=>b.date<date).sort((a,b)=>b.date.localeCompare(a.date)||b.title-a.title);
-      const parts=new Set([...earlier[0]?.parts.keys()||[],...block.parts.keys(),...extraParts,...sales.filter(r=>r.date===date).map(r=>r.part)]);
+      const parts=new Set([...earlier.flatMap(b=>[...b.parts.keys()]),...block.parts.keys(),...extraParts,...sales.filter(r=>r.date===date).map(r=>r.part)]);
       for(const part of parts){if(!partPattern.test(part))throw Error('Invalid Norma stock part '+part);let row=block.parts.get(part);if(!row){row=Math.max(block.title+2,...[...block.parts.values()].map(r=>r+1));if(!fresh){while(row<=block.end&&[cols.part,cols.opening,cols.received,cols.transfer,cols.dispatch,cols.balance].filter(Boolean).some(c=>sheet.value(c+row)!==''||sheet.formula(c+row)))row++;if(row>block.end)throw Error('No free stock row for '+part+' on '+date+'; add a blank row to that stock block in Excel');}sheet.set(cols.part+row,part,{styleFrom:cols.part+'3'});sheet.set(cols.serial+row,block.parts.size+1,{styleFrom:cols.serial+'3'});block.parts.set(part,row);}
-        const prior=earlier.find(b=>b.parts.has(part)),openingRef=cols.opening+row;
-        if(prior){const ref=cols.balance+prior.parts.get(part);const value=stockCalculator(sheet)(ref);sheet.number(openingRef,quantity(value),{formula:ref,styleFrom:cols.opening+'3'});}
+        const source=latestClosing(sheet,blocks,{region,part,beforeDate:date}),openingRef=cols.opening+row;
+        if(source){sheet.number(openingRef,quantity(source.quantity),{styleFrom:cols.opening+'3'});result.openingSources.push({...source,quantity:quantity(source.quantity)});}
         else if(sheet.value(openingRef)===''&&!sheet.formula(openingRef))sheet.number(openingRef,openingBalances[region]?.[part]??0,{styleFrom:cols.opening+'3'});
         sheet.number(cols.dispatch+row,quantity(totals.get(date+':'+part)||0n),{styleFrom:cols.dispatch+'3'});
         const formula=openingRef+'+'+cols.received+row+(cols.transfer?'-'+cols.transfer+row:'')+'-'+cols.dispatch+row;
@@ -82,11 +102,11 @@ function syncStock(book,{affected={gurgaon:[],gujarat:[]},throughDate,extraParts
   const layouts={gurgaon:{start:65,end:71,part:'B'},gujarat:{start:73,end:79,part:'J'}};
   const blocksByRegion=Object.fromEntries(['gurgaon','gujarat'].map(region=>[region,stockBlocks(sheet,region)]));
   for(const date of updatedDates){
-    const left=blocksByRegion.gurgaon.find(b=>b.date===date),right=blocksByRegion.gujarat.find(b=>b.date===date);
+    const left=blocksByRegion.gurgaon.filter(b=>b.date===date).at(-1),right=blocksByRegion.gujarat.filter(b=>b.date===date).at(-1);
     const aligned=left&&right&&left.title===right.title;
     const alignedEnd=aligned?Math.max(left.title+2,...left.parts.values(),...right.parts.values()):null;
     for(const region of ['gurgaon','gujarat']){
-      const block=blocksByRegion[region].find(b=>b.date===date);if(!block)continue;
+      const block=blocksByRegion[region].filter(b=>b.date===date).at(-1);if(!block)continue;
       const layout=layouts[region],last=alignedEnd??Math.max(block.title+2,...block.parts.values());
       for(let code=layout.start;code<=layout.end;code++){
         const col=String.fromCharCode(code),template=col==='O'?'N':col;
@@ -97,4 +117,4 @@ function syncStock(book,{affected={gurgaon:[],gujarat:[]},throughDate,extraParts
   }
   return result;
 }
-module.exports={SHEETS,checkHeaders,addInvoice,syncStock,salesRows,stockBlocks,stockCalculator};
+module.exports={SHEETS,checkHeaders,addInvoice,syncStock,salesRows,stockBlocks,stockCalculator,latestClosing};

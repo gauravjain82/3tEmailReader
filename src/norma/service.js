@@ -63,12 +63,13 @@ async function runNorma(config,{throughDate=today(),log=console.log,parsePdf=par
         entry.sales=changes;entry.stock=syncStock(book,{affected,throughDate,extraParts:allParts,openingBalances:config.openingBalances});
         const added=changes.findIndex(c=>c.status==='ADDED');if(added>=0)book.focus(SHEETS[item.invoices[added].region],changes[added].rows[0]);
         const backup=commitWorkbook(config,original,book);if(backup)report.backups.push(backup);
+        log('Norma stock: openings read from latest dated worksheet entries:',entry.stock.openingSources.length);
         entry.donePath=archive(item.file,item.bytes,config.doneDirectory);entry.status='DONE';
         log('Norma saved:',path.basename(item.file),changes.map((c,index)=>c.invoiceNumber+' '+c.status+'; sheet "'+SHEETS[item.invoices[index].region]+'", row(s) '+c.rows.join(', ')).join(' | '));
       }catch(error){entry.status='FAILED';entry.error=error.message;report.errors.push({file:item.file,error:error.message});log('Norma PDF kept in Pending:',path.basename(item.file),error.message);}
       saveReport();
     }
-    if(!parsed.length&&!files.length){const original=fs.readFileSync(config.workbookPath),book=new Workbook(original);checkHeaders(book);report.stock.push(syncStock(book,{throughDate,openingBalances:config.openingBalances}));const backup=commitWorkbook(config,original,book);if(backup)report.backups.push(backup);}
+    if(!parsed.length&&!files.length){const original=fs.readFileSync(config.workbookPath),book=new Workbook(original);checkHeaders(book);const stock=syncStock(book,{throughDate,openingBalances:config.openingBalances});report.stock.push(stock);const backup=commitWorkbook(config,original,book);if(backup)report.backups.push(backup);log('Norma stock: openings read from latest dated worksheet entries:',stock.openingSources.length);}
     report.completedAt=new Date().toISOString();saveReport();log('Norma workbook output:',config.workbookPath);log('Norma report:',reportPath);return {...report,reportPath};
   }finally{fs.closeSync(fd);fs.unlinkSync(lock);}
 }
