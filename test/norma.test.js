@@ -1,10 +1,24 @@
 const {test}=require('node:test');const assert=require('node:assert/strict');const fs=require('fs'),os=require('os'),path=require('path');
 const {normaWorkbook,normaText}=require('./helpers/normaFixture');
 const {parseNormaText,parseNormaPdf}=require('../src/norma/parser');const {Workbook,NS,elements}=require('../src/norma/xlsx');
-const {addInvoice,syncStock,salesRows,stockBlocks,checkHeaders,latestClosing}=require('../src/norma/workbook');
+const {SHEETS,addInvoice,syncStock,salesRows,stockBlocks,checkHeaders,latestClosing}=require('../src/norma/workbook');
 const {runNorma,loadConfig}=require('../src/norma/service');
 function fixture(t){const root=fs.mkdtempSync(path.join(os.tmpdir(),'norma-test-'));const config={workbookPath:path.join(root,'stock.xlsx'),pendingDirectory:path.join(root,'Pending'),doneDirectory:path.join(root,'Done'),backupDirectory:path.join(root,'Backups'),reportDirectory:path.join(root,'Reports')};fs.writeFileSync(config.workbookPath,normaWorkbook());fs.mkdirSync(config.pendingDirectory);t.after(()=>{assert.equal(path.dirname(root),path.resolve(os.tmpdir()));assert.ok(path.basename(root).startsWith('norma-test-'));fs.rmSync(root,{recursive:true,force:true});});return {root,config};}
 const invoice=()=>parseNormaText(normaText())[0];
+
+test('rerunning an existing invoice refreshes its older stock day and subsequent openings',async t=>{
+  const {config}=fixture(t),book=new Workbook(fs.readFileSync(config.workbookPath));addInvoice(book,invoice());syncStock(book,{throughDate:'2026-11-11'});const s=book.sheet(SHEETS.stock),blocks=stockBlocks(s,'gurgaon'),row=blocks.find(b=>b.date==='2026-11-10').parts.get('13892M74L60');s.set('F'+row,'');fs.writeFileSync(config.workbookPath,book.pack());fs.writeFileSync(path.join(config.pendingDirectory,'retry.pdf'),'test');
+  const report=await runNorma(config,{throughDate:'2026-11-11',parsePdf:async()=>[invoice()],log:()=>{}});assert.deepEqual(report.errors,[]);assert.equal(report.files[0].sales[0].status,'ALREADY_PRESENT');const saved=new Workbook(fs.readFileSync(config.workbookPath)),stock=saved.sheet(SHEETS.stock);assert.equal(salesRows(saved,'gurgaon').length,1);assert.equal(stock.value('F'+row),'250');assert.equal(stock.value('G'+row),'700');const following=stockBlocks(stock,'gurgaon').find(b=>b.date==='2026-11-11').parts.get('13892M74L60');assert.equal(stock.value('C'+following),'700');
+});
+
+test('stock-from refreshes older sales dispatches without Pending PDFs and preserves manual movements',async t=>{
+  const {config}=fixture(t),book=new Workbook(fs.readFileSync(config.workbookPath));addInvoice(book,invoice());syncStock(book,{throughDate:'2026-11-11'});const s=book.sheet(SHEETS.stock),row=stockBlocks(s,'gurgaon').find(b=>b.date==='2026-11-10').parts.get('13892M74L60');s.number('D'+row,100);s.number('E'+row,25);s.set('F'+row,'');s.number('G'+row,1075);fs.writeFileSync(config.workbookPath,book.pack());
+  const report=await runNorma(config,{throughDate:'2026-11-11',stockFromDate:'2026-11-10',log:()=>{}});assert.deepEqual(report.errors,[]);assert.equal(report.files.length,0);assert.equal(report.stockFromDate,'2026-11-10');assert.equal(report.backups.length,1);const saved=new Workbook(fs.readFileSync(config.workbookPath)),stock=saved.sheet(SHEETS.stock);assert.equal(salesRows(saved,'gurgaon').length,1);assert.equal(stock.value('D'+row),'100');assert.equal(stock.value('E'+row),'25');assert.equal(stock.value('F'+row),'250');assert.equal(stock.value('G'+row),'775');const following=stockBlocks(stock,'gurgaon').find(b=>b.date==='2026-11-11').parts.get('13892M74L60');assert.equal(stock.value('C'+following),'775');
+});
+
+test('invalid stock-from dates leave the workbook unchanged',async t=>{
+  const {config}=fixture(t),original=fs.readFileSync(config.workbookPath);for(const stockFromDate of ['2026-02-30','invalid','2026-11-12'])await assert.rejects(runNorma(config,{throughDate:'2026-11-11',stockFromDate,log:()=>{}}),/Invalid Norma stock-from/);assert.deepEqual(fs.readFileSync(config.workbookPath),original);
+});
 
 function latestEntryBook(region='gurgaon',closing=825){
   const book=new Workbook(normaWorkbook()),s=book.sheet('STOCK DETAILS');

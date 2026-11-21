@@ -107,6 +107,7 @@ function stockCalculator(sheet){
 }
 const nextDay=date=>new Date(Date.parse(date+'T00:00:00Z')+86400000).toISOString().slice(0,10);
 function syncStock(book,{affected={gurgaon:[],gujarat:[]},throughDate,extraParts=[],openingBalances={}}){
+  if(book.sheets.has('STOCK LEDGER')||book.sheets.has('STOCK OPENINGS'))return require('./ledger').syncLedger(book,{throughDate,openingBalances});
   if(!validDate(throughDate))throw Error('Invalid Norma stock through-date');const sheet=book.sheet(SHEETS.stock),result={createdDays:0,updatedDays:0,warnings:[],openingSources:[],recoveries:[]};const newTitles=new Map(),updatedDates=new Set();
   // Reserve enough vertical space for either side before arranging new days.
   const possibleParts=new Set(extraParts);for(const [ref] of sheet.cells)if(/^(?:B|J)\d+$/.test(ref)&&partPattern.test(sheet.value(ref)))possibleParts.add(sheet.value(ref));for(const region of ['gurgaon','gujarat'])for(const row of salesRows(book,region))possibleParts.add(row.part);

@@ -16,7 +16,8 @@
     "rejections": "node scripts/parse-rejections.js",
     "handwriting:test": "node scripts/test-handwriting.js",
     "test": "node --test test/*.test.js",
-    "norma": "node src/norma/service.js"
+    "norma": "node src/norma/service.js",
+    "norma:migrate": "node src/norma/migrate.js"
   },
   "dependencies": {
     "@tesseract.js-data/eng": "1.0.0",

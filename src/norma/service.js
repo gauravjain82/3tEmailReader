@@ -2,6 +2,7 @@ const fs=require('fs'),path=require('path'),crypto=require('crypto');
 const {Workbook}=require('./xlsx');
 const {parseNormaPdf}=require('./parser');
 const {SHEETS,checkHeaders,addInvoice,syncStock}=require('./workbook');
+const {hasLedger,verifyLedger,checkInvoiceWindow}=require('./ledger');
 const hash=bytes=>crypto.createHash('sha256').update(bytes).digest('hex');
 const today=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Kolkata',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
 function loadConfig(file){
@@ -13,11 +14,12 @@ function loadConfig(file){
   if(path.extname(config.workbookPath).toLowerCase()!=='.xlsx')throw Error('Norma workbook must be an .xlsx file');
   return config;
 }
-function commitWorkbook(config,original,book){
+function commitWorkbook(config,original,book,{throughDate}={}){
   if(!book.dirty)return null;
   const destination=config.workbookPath,folder=path.dirname(destination),temp=path.join(folder,'.norma-'+crypto.randomUUID()+'.tmp');
   if(fs.existsSync(path.join(folder,'~$'+path.basename(destination))))throw Error('Close the Norma workbook in Excel before running the parser');
-  const bytes=book.pack();new Workbook(bytes); // Validate the package before replacing the workbook.
+  const bytes=book.pack(),saved=new Workbook(bytes); // Validate the package before replacing the workbook.
+  if(throughDate&&hasLedger(saved))verifyLedger(saved,{throughDate});
   fs.mkdirSync(config.backupDirectory,{recursive:true});
   const backup=path.join(config.backupDirectory,path.basename(destination,'.xlsx')+'-'+Date.now()+'-'+crypto.randomUUID().slice(0,8)+'.xlsx');
   try{
@@ -38,14 +40,16 @@ function moveToDone(file,bytes,done){
     fs.unlinkSync(file);return dest;
   }throw Error('Too many same-named PDFs in Done');
 }
-async function runNorma(config,{throughDate=today(),log=console.log,parsePdf=parseNormaPdf,archive=moveToDone}={}){
+async function runNorma(config,{throughDate=today(),stockFromDate,log=console.log,parsePdf=parseNormaPdf,archive=moveToDone}={}){
+  if(stockFromDate&&(!/^\d{4}-\d{2}-\d{2}$/.test(stockFromDate)||!Number.isFinite(Date.parse(stockFromDate))||new Date(stockFromDate).toISOString().slice(0,10)!==stockFromDate||stockFromDate>throughDate))throw Error('Invalid Norma stock-from date; use YYYY-MM-DD on or before the processing date');
   if(!fs.existsSync(config.workbookPath))throw Error('Norma workbook not found: '+config.workbookPath+'. Copy your stock workbook here or update workbookPath in the Norma config.');
   for(const folder of [config.pendingDirectory,config.doneDirectory,config.reportDirectory])fs.mkdirSync(folder,{recursive:true});
   const lock=config.workbookPath+'.norma.lock';let fd;
   try{fd=fs.openSync(lock,'wx');fs.writeFileSync(fd,JSON.stringify({pid:process.pid,host:require('os').hostname(),startedAt:new Date().toISOString()}));}catch(error){if(error.code==='EEXIST')throw Error('Another Norma run is active, or a previous run left '+lock+'. Close the other run before removing a stale lock.');throw error;}
-  const report={startedAt:new Date().toISOString(),throughDate,workbookPath:config.workbookPath,files:[],backups:[],stock:[],errors:[]};
+  const report={startedAt:new Date().toISOString(),throughDate,stockFromDate,workbookPath:config.workbookPath,files:[],backups:[],stock:[],errors:[]};
   const reportPath=path.join(config.reportDirectory,new Date().toISOString().replace(/[:.]/g,'-')+'-'+crypto.randomUUID().slice(0,8)+'.json');
   const saveReport=()=>fs.writeFileSync(reportPath,JSON.stringify(report,null,2));
+  const logStock=stock=>{if(stock.format==='ledger-v1')log('Norma stock reconciled:',stock.reconciliation.rows,'rows; dispatch quantity',stock.reconciliation.dispatchQuantity);else log('Norma stock: openings read from latest dated worksheet entries:',stock.openingSources.length);for(const recovered of stock.recoveries)log('Norma stock recovered:',recovered.region,recovered.partNumber,recovered.date,'closing',recovered.quantity,'basis:',recovered.basis);};
   try{
     const files=fs.readdirSync(config.pendingDirectory,{withFileTypes:true}).filter(f=>f.isFile()&&/\.pdf$/i.test(f.name)).map(f=>path.join(config.pendingDirectory,f.name)).sort();
     log('Norma workbook:',config.workbookPath);log('Norma Pending folder:',config.pendingDirectory);log('PDF files found:',files.length);
@@ -58,27 +62,28 @@ async function runNorma(config,{throughDate=today(),log=console.log,parsePdf=par
       try{
         const original=fs.readFileSync(config.workbookPath),book=new Workbook(original);checkHeaders(book);
         const changes=item.invoices.map(i=>addInvoice(book,i));
-        const affected={gurgaon:[],gujarat:[]};changes.forEach((c,index)=>{if(c.status==='ADDED')affected[item.invoices[index].region].push(item.invoices[index].date);});
+        changes.forEach((change,index)=>{if(change.status==='ADDED')checkInvoiceWindow(book,item.invoices[index]);});
+        // Existing invoices must also refresh their stock date on a rerun.
+        const affected={gurgaon:stockFromDate?[stockFromDate]:[],gujarat:stockFromDate?[stockFromDate]:[]};changes.forEach((c,index)=>{affected[item.invoices[index].region].push(item.invoices[index].date);});
         if(item.invoices.some(i=>i.date>throughDate))throw Error('Invoice date is after the stock processing date');
         entry.sales=changes;entry.stock=syncStock(book,{affected,throughDate,extraParts:allParts,openingBalances:config.openingBalances});
         const added=changes.findIndex(c=>c.status==='ADDED');if(added>=0)book.focus(SHEETS[item.invoices[added].region],changes[added].rows[0]);
-        const backup=commitWorkbook(config,original,book);if(backup)report.backups.push(backup);
-        log('Norma stock: openings read from latest dated worksheet entries:',entry.stock.openingSources.length);
-        for(const recovered of entry.stock.recoveries)log('Norma stock recovered:',recovered.region,recovered.partNumber,recovered.date,'closing',recovered.quantity,'basis:',recovered.basis);
+        const backup=commitWorkbook(config,original,book,{throughDate});if(backup)report.backups.push(backup);
+        logStock(entry.stock);
         entry.donePath=archive(item.file,item.bytes,config.doneDirectory);entry.status='DONE';
         log('Norma saved:',path.basename(item.file),changes.map((c,index)=>c.invoiceNumber+' '+c.status+'; sheet "'+SHEETS[item.invoices[index].region]+'", row(s) '+c.rows.join(', ')).join(' | '));
       }catch(error){entry.status='FAILED';entry.error=error.message;report.errors.push({file:item.file,error:error.message});log('Norma PDF kept in Pending:',path.basename(item.file),error.message);}
       saveReport();
     }
-    if(!parsed.length&&!files.length){const original=fs.readFileSync(config.workbookPath),book=new Workbook(original);checkHeaders(book);const stock=syncStock(book,{throughDate,openingBalances:config.openingBalances});report.stock.push(stock);const backup=commitWorkbook(config,original,book);if(backup)report.backups.push(backup);log('Norma stock: openings read from latest dated worksheet entries:',stock.openingSources.length);}
+    if(!parsed.length){const original=fs.readFileSync(config.workbookPath),book=new Workbook(original);if(!files.length||hasLedger(book)){checkHeaders(book);const stock=syncStock(book,{throughDate,affected:{gurgaon:stockFromDate?[stockFromDate]:[],gujarat:stockFromDate?[stockFromDate]:[]},openingBalances:config.openingBalances});report.stock.push(stock);const backup=commitWorkbook(config,original,book,{throughDate});if(backup)report.backups.push(backup);logStock(stock);}}
     report.completedAt=new Date().toISOString();saveReport();log('Norma workbook output:',config.workbookPath);log('Norma report:',reportPath);return {...report,reportPath};
-  }finally{fs.closeSync(fd);fs.unlinkSync(lock);}
+  }catch(error){report.errors.push({scope:'stock',error:error.message});report.completedAt=new Date().toISOString();saveReport();throw error;}finally{fs.closeSync(fd);fs.unlinkSync(lock);}
 }
 async function main(){
-  const args=process.argv.slice(2);let file=path.resolve(__dirname,'../../norma/config.json'),date;
-  for(let i=0;i<args.length;i+=2){if(!args[i+1])throw Error('Usage: npm run norma -- [--config PATH] [--date YYYY-MM-DD]');if(args[i]==='--config')file=path.resolve(args[i+1]);else if(args[i]==='--date')date=args[i+1];else throw Error('Unknown Norma option: '+args[i]);}
+  const args=process.argv.slice(2);let file=path.resolve(__dirname,'../../norma/config.json'),date,stockFromDate;
+  for(let i=0;i<args.length;i+=2){if(!args[i+1])throw Error('Usage: npm run norma -- [--config PATH] [--date YYYY-MM-DD] [--stock-from YYYY-MM-DD]');if(args[i]==='--config')file=path.resolve(args[i+1]);else if(args[i]==='--date')date=args[i+1];else if(args[i]==='--stock-from')stockFromDate=args[i+1];else throw Error('Unknown Norma option: '+args[i]);}
   if(!fs.existsSync(file)){if(file!==path.resolve(__dirname,'../../norma/config.json'))throw Error('Norma configuration not found: '+file);fs.mkdirSync(path.dirname(file),{recursive:true});fs.copyFileSync(path.resolve(__dirname,'../../norma/config.example.json'),file);console.log('Created Norma configuration:',file);}
-  const report=await runNorma(loadConfig(file),date?{throughDate:date}:{});if(report.errors.length)process.exitCode=1;
+  const report=await runNorma(loadConfig(file),{...(date?{throughDate:date}:{}),stockFromDate});if(report.errors.length)process.exitCode=1;
 }
 if(require.main===module)main().catch(error=>{console.error('Norma service:',error.message);process.exitCode=1;});
 module.exports={loadConfig,runNorma,commitWorkbook,moveToDone};

@@ -12,6 +12,8 @@ This service runs separately from Gmail extraction and rejection parsing. It rea
 
 The service reads the top-level PDF files in Pending once and exits. A PDF goes to Done only after its invoice records and stock changes are saved, or after verifying that the same records already exist. Invalid, conflicting, unsupported or unsaved files remain in Pending, with their reasons in the dated JSON report under `norma/Reports`. Other PDFs in the batch can still succeed. The original PDF bytes, including signatures, remain unchanged.
 
+Rerunning an already recorded invoice also refreshes stock for its invoice date and following days, without adding duplicate sales rows. If sales are already present but an older stock day needs refreshing and its PDFs are in Done, run `npm run norma -- --stock-from 2026-11-19` (replace the date as needed; add `--config PATH` for another configuration). This rebuilds both regions' dispatches and following openings from that date through today, including when Pending is empty. It updates the configured workbook with a backup and preserves manual receipts, transfers and Transit. Choose the first date that needs correction; earlier stock entries supply the opening baseline and remain unchanged. As with reprocessing an older invoice, openings from the selected date onward are carried forward and any manual opening resets in that range are replaced.
+
 The run window prints the exact workbook path and each invoice's sheet and row numbers. Newly added invoice rows inherit date/number formatting even when empty formatted rows already exist. The saved workbook opens on the updated sales sheet with a new invoice selected. For Ahmedabad invoices, look in **Norma sales report Smg**. If the workbook you opened looks empty, compare its full path with **Norma workbook output** in the run window.
 
 The installation prepared during development has a local copy of the supplied stock workbook at `norma/Norma stock.xlsx`. The original workbook in Downloads is unchanged. These local business files are ignored by Git and are not included when pulling the code onto another PC; supply that PC's workbook and config separately.
@@ -61,7 +63,39 @@ The customer part number, quantity, basic rate, printed assessable value, taxes 
 
 Original buyer pages are used once per invoice. Transporter, supplier and extra copies do not multiply sales or stock. An identical invoice already in the workbook is verified and skipped. A conflicting date, destination, part, quantity, rate or amount leaves the PDF in Pending. Existing workbook money values can differ by up to two paise because older rows use unrounded Excel calculations; existing figures are preserved. New rows use the PDF's printed amounts. Unrelated workbook entries, styles, merges and existing sales formulas are retained. Excel rebuilds its calculation chain when the updated workbook opens.
 
-## Daily stock
+## Continuous stock ledger (recommended)
+
+The redesigned workbook uses a continuous `STOCK LEDGER` sheet. The parser detects it automatically. Each row is identified by **Date + Location + Part No.**, so sorting, inserting rows, changing column widths or Excel's displayed date format does not change which stock entry is updated. Keep the header names and column order intact. Dates can be ISO text, Indian day/month/year text, or Excel date cells; the service writes ISO dates.
+
+| Column | Maintained by |
+|---|---|
+| Date, Location, Part No. | Service; also identifies a manual movement row |
+| Opening, Dispatch, Closing | Service, numeric values rebuilt on every run |
+| Received, Transfer out, Transit, Notes | Manual inputs, preserved by key |
+
+Enter quantities as numbers, not formulas. Gurgaon closing is opening + received - transfer out - dispatch. Gujarat closing is opening + received - dispatch; enter transfers to Gujarat as manual Gujarat receipts when received. Transit stays manual and does not change closing. New parts start at zero unless a configured initial opening is supplied before their first run. The service records their initial opening once.
+
+`STOCK OPENINGS` stores one dated, numeric initial opening for each location and part. These explicit starting balances replace historical cell-reference chains. The service recalculates **every ledger day from that part's opening through today**, even when Pending is empty or an invoice already exists. Edits to sales quantities or manual movements therefore carry forward automatically. `--stock-from` is not needed for migrated workbooks. Negative balances are reported and remain visible.
+
+Before saving and again after packing the XLSX, the service checks dispatch against the sales sheets and opening/closing arithmetic. Duplicate keys, missing/invalid openings, malformed current sales or manual quantities, and conflicting invoice reruns prevent saving and leave PDFs in Pending. A newly added invoice dated before its verified starting balance is refused: migrate from an earlier date to include it. Historical sales before the cutover are already represented by the starting balance and are not dispatched again.
+
+### One-time migration
+
+Close Excel and stop the parser. Select the first day to rebuild; the latest saved closing **before** that day supplies its initial opening. Review those balances against your records. The migration refuses an invalid saved initial balance rather than guessing it. Choose a new output filename:
+
+```powershell
+npm run norma:migrate -- --input "C:\Norma\Norma.xlsx" --output "C:\Norma\Norma-compatible.xlsx" --from 2026-11-19
+```
+
+Optional `--date YYYY-MM-DD` sets the last day to calculate; otherwise it is today in India. The source file is never overwritten. The output preserves both sales sheets and the old `STOCK DETAILS` sheet as history, imports manual movements from the cutover onward, adds `STOCK OPENINGS` and `STOCK LEDGER`, verifies the saved package and writes a `.migration.json` audit beside it. Future dated manual movements are preserved for later runs. Daily openings from the cutover onward are rebuilt; old manual opening resets are not carried over as independent adjustments.
+
+If an old sales date is malformed, it can be preserved outside the new ledger only when valid surrounding sales dates establish that it predates the cutover. Such rows are listed in `STOCK LEGACY SALES` and the migration audit with fingerprints; no replacement dates are guessed. Edits/removal of those rows require review instead of silently excluding changed data. Invalid dates that cannot be established as pre-cutover history stop migration.
+
+Set `workbookPath` in `norma/config.json` to the new compatible workbook and keep using **Run Norma Parser.cmd**. Paths for Pending, Done, Backups and Reports are unchanged. Future runs update this same configured workbook, not another generated workbook. Check `STOCK LEDGER` for current stock; the original `STOCK DETAILS` is retained for historical reference and is no longer used in calculations. You can filter the ledger by date and location. The report records `format: ledger-v1`, changed balances and `reconciliation.verified` with the row and dispatch totals.
+
+## Daily stock in legacy workbooks
+
+The following behavior applies only to workbooks that have not been migrated. For automatic reconciliation on idle runs, use the continuous ledger above.
 
 Dispatches are **replaced with the total for that date and part from the corresponding sales sheet**, rather than incremented on each run. Repeating a run therefore does not subtract the same invoice again.
 

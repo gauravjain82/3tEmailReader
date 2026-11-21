@@ -14,7 +14,7 @@ class Sheet{
   formula(ref){return elements(this.cells.get(ref)||this.doc.createElement('empty'),'f')[0]?.textContent||'';}
   maxRow(){return Math.max(0,...this.rows.keys());}
   set(ref,value,{styleFrom,formula}={}){
-    const old=this.cells.get(ref),wasBlank=this.value(ref)===''&&!this.formula(ref);if((formula||'')===this.formula(ref)&&this.value(ref)===String(value??''))return;
+    const old=this.cells.get(ref),wasBlank=this.value(ref)===''&&!this.formula(ref);if((formula||'')===this.formula(ref)&&this.value(ref)===String(value??'')&&old?.getAttribute('t')!=='e')return;
     const rowNo=Number(ref.match(/\d+$/)[0]);let row=this.rows.get(rowNo);
     if(!row){row=this.doc.createElementNS(NS,'row');row.setAttribute('r',rowNo);const after=[...this.rows.keys()].sort((a,b)=>a-b).find(n=>n>rowNo);this.data.insertBefore(row,after?this.rows.get(after):null);this.rows.set(rowNo,row);}
     let cell=old;
@@ -43,6 +43,17 @@ class Sheet{
 class Workbook{
   constructor(bytes){if(bytes.length>50*1024*1024)throw Error('Workbook is too large');let expanded=0;this.files=unzipSync(bytes,{filter:entry=>{expanded+=entry.originalSize;if(expanded>256*1024*1024||entry.originalSize>64*1024*1024)throw Error('Expanded workbook size limit exceeded');return true;}});if(!this.files['xl/workbook.xml'])throw Error('Not an XLSX workbook');this.doc=xml(this.files['xl/workbook.xml']);this.strings=this.files['xl/sharedStrings.xml']?elements(xml(this.files['xl/sharedStrings.xml']),'si').map(si=>elements(si,'t').map(t=>t.textContent).join('')):[];this.date1904=elements(this.doc,'workbookPr')[0]?.getAttribute('date1904')==='1';const rels=xml(this.files['xl/_rels/workbook.xml.rels']);const byId=new Map(Array.from(rels.documentElement.childNodes).filter(n=>n.nodeType===1).map(r=>[r.getAttribute('Id'),r.getAttribute('Target')]));this.sheets=new Map();for(const sheet of elements(this.doc,'sheet')){const target=byId.get(sheet.getAttribute('r:id'));const file=target.startsWith('/')?target.slice(1):path.posix.normalize('xl/'+target);if(!this.files[file])throw Error('Missing worksheet '+file);this.sheets.set(sheet.getAttribute('name'),new Sheet(this,sheet.getAttribute('name'),file));}}
   sheet(name){const sheet=this.sheets.get(name);if(!sheet)throw Error('Required worksheet missing: '+name);return sheet;}
+  addSheet(name,{widths=[]}={}){
+    if(!name||name.length>31||/[\\/?*\[\]:]/.test(name)||[...this.sheets.keys()].some(n=>n.toLowerCase()===name.toLowerCase()))throw Error('Invalid or duplicate worksheet name: '+name);
+    let number=1;while(this.files[`xl/worksheets/sheet${number}.xml`])number++;
+    const file=`xl/worksheets/sheet${number}.xml`,rels=xml(this.files['xl/_rels/workbook.xml.rels']),relNS=rels.documentElement.namespaceURI;
+    const ids=new Set(Array.from(rels.documentElement.childNodes).filter(n=>n.nodeType===1).map(n=>n.getAttribute('Id')));let id=1;while(ids.has('rId'+id))id++;
+    const relationship=rels.createElementNS(relNS,'Relationship');relationship.setAttribute('Id','rId'+id);relationship.setAttribute('Type','http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet');relationship.setAttribute('Target',`worksheets/sheet${number}.xml`);rels.documentElement.appendChild(relationship);this.files['xl/_rels/workbook.xml.rels']=serialize(rels);
+    const types=xml(this.files['[Content_Types].xml']),override=types.createElementNS(types.documentElement.namespaceURI,'Override');override.setAttribute('PartName','/'+file);override.setAttribute('ContentType','application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml');types.documentElement.appendChild(override);this.files['[Content_Types].xml']=serialize(types);
+    const entry=this.doc.createElementNS(NS,'sheet');entry.setAttribute('name',name);entry.setAttribute('sheetId',Math.max(0,...elements(this.doc,'sheet').map(s=>Number(s.getAttribute('sheetId'))))+1);entry.setAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships','r:id','rId'+id);elements(this.doc,'sheets')[0].appendChild(entry);
+    this.files[file]=strToU8(`<worksheet xmlns="${NS}"><dimension ref="A1:J1"/><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft" activeCell="A2" sqref="A2"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="15"/>${widths.length?'<cols>'+widths.map((width,i)=>`<col min="${i+1}" max="${i+1}" width="${Number(width)}" customWidth="1"/>`).join('')+'</cols>':''}<sheetData/><autoFilter ref="A1:J1"/></worksheet>`);
+    const sheet=new Sheet(this,name,file);sheet.dirty=true;this.sheets.set(name,sheet);return sheet;
+  }
   focus(name,row){
     const names=[...this.sheets.keys()],index=names.indexOf(name);if(index<0)throw Error('Worksheet not found: '+name);
     const view=elements(this.doc,'workbookView')[0];if(view)view.setAttribute('activeTab',index);
